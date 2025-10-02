@@ -11,37 +11,29 @@ import android.view.View
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.MethodCall // Import MethodCall
+import io.flutter.plugin.common.MethodChannel // Import MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val SECURE_FLAG_CHANNEL = "com.example.exam_browser/secure_flag"
     private val ACTIVITY_MONITOR_CHANNEL = "com.example.exam_browser/activity_monitor"
 
-    private lateinit var activityMonitorChannelInstance: MethodChannel // Ganti nama agar tidak konflik dengan variabel lokal
+    // Deklarasikan lateinit var di sini dengan benar
+    private lateinit var activityMonitorChannelInstance: MethodChannel
+
     private var isMonitoringActivity = false
     private val handler = Handler(Looper.getMainLooper())
     private var isAppInFocus = true
     private var initialSystemUiVisibility: Int = 0
+    private var isCurrentlyLockedByFocus = false
+    private var isCurrentlyLockedByPause = false
 
-    // Hapus atau komentari focusCheckRunnable jika tidak digunakan
-    /*
-    private val focusCheckRunnable = object : Runnable {
-        override fun run() {
-            if (isMonitoringActivity) {
-                // checkWindowFocus() // Fungsi ini sudah dihapus/dikomentari
-                handler.postDelayed(this, 1000)
-            }
-        }
-    }
-    */
-
-    // Perbaiki tanda tangan metode dan penggunaan binaryMessenger
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) { // Perbaikan di sini
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         // Handler untuk FLAG_SECURE
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SECURE_FLAG_CHANNEL).setMethodCallHandler { // Pastikan ini benar
-                call, result ->
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SECURE_FLAG_CHANNEL).setMethodCallHandler {
+                call: MethodCall, result: MethodChannel.Result -> // Tambahkan tipe eksplisit
             when (call.method) {
                 "setSecureFlag" -> {
                     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -56,22 +48,23 @@ class MainActivity: FlutterActivity() {
         }
 
         // Handler untuk Activity Monitor
-        activityMonitorChannelInstance = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACTIVITY_MONITOR_CHANNEL) // Pastikan ini benar
+        // Inisialisasi activityMonitorChannelInstance di sini
+        activityMonitorChannelInstance = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACTIVITY_MONITOR_CHANNEL)
         activityMonitorChannelInstance.setMethodCallHandler {
-                call, result ->
+                call: MethodCall, result: MethodChannel.Result -> // Tambahkan tipe eksplisit
             when (call.method) {
                 "startMonitoring" -> {
                     isMonitoringActivity = true
                     isAppInFocus = true
+                    isCurrentlyLockedByFocus = false
+                    isCurrentlyLockedByPause = false
                     initialSystemUiVisibility = window.decorView.systemUiVisibility
                     hideSystemUI()
-                    // handler.post(focusCheckRunnable) // Jika focusCheckRunnable dihapus
                     result.success("Activity monitoring started")
                     Log.d("ActivityMonitor", "Monitoring started")
                 }
                 "stopMonitoring" -> {
                     isMonitoringActivity = false
-                    // handler.removeCallbacks(focusCheckRunnable) // Jika focusCheckRunnable dihapus
                     showSystemUI(initialSystemUiVisibility)
                     result.success("Activity monitoring stopped")
                     Log.d("ActivityMonitor", "Monitoring stopped")
@@ -109,26 +102,37 @@ class MainActivity: FlutterActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        Log.d("ActivityMonitor", "onWindowFocusChanged: $hasFocus, isMonitoring: $isMonitoringActivity")
+        Log.d("ActivityMonitor", "onWindowFocusChanged: $hasFocus, isMonitoring: $isMonitoringActivity, isLockedByFocus: $isCurrentlyLockedByFocus")
+        // Pastikan activityMonitorChannelInstance sudah diinisialisasi sebelum digunakan
+        if (!::activityMonitorChannelInstance.isInitialized) return
+
         if (isMonitoringActivity) {
             isAppInFocus = hasFocus
-            if (!hasFocus) {
+            if (!hasFocus && !isCurrentlyLockedByFocus && !isCurrentlyLockedByPause) {
                 Log.w("ActivityMonitor", "Window lost focus! Requesting app lock.")
-                activityMonitorChannelInstance.invokeMethod("lockApp", null) // Gunakan activityMonitorChannelInstance
-            } else {
+                val reason = "Terdeteksi kehilangan fokus jendela."
+                activityMonitorChannelInstance.invokeMethod("lockApp", reason)
+                isCurrentlyLockedByFocus = true
+            } else if (hasFocus) {
                 hideSystemUI()
+                isCurrentlyLockedByFocus = false
             }
         }
     }
 
     override fun onPause() {
         super.onPause()
-        Log.d("ActivityMonitor", "onPause, isMonitoring: $isMonitoringActivity")
-        if (isMonitoringActivity && !isFinishing) {
+        Log.d("ActivityMonitor", "onPause, isMonitoring: $isMonitoringActivity, isLockedByPause: $isCurrentlyLockedByPause")
+        // Pastikan activityMonitorChannelInstance sudah diinisialisasi sebelum digunakan
+        if (!::activityMonitorChannelInstance.isInitialized) return
+
+        if (isMonitoringActivity && !isFinishing && !isCurrentlyLockedByFocus && !isCurrentlyLockedByPause) {
             Log.w("ActivityMonitor", "App paused! Requesting app lock.")
             handler.postDelayed({
-                if (isMonitoringActivity && !isAppInFocus) { // Periksa juga isAppInFocus
-                    activityMonitorChannelInstance.invokeMethod("lockApp", null) // Gunakan activityMonitorChannelInstance
+                if (isMonitoringActivity && !isAppInFocus && !isCurrentlyLockedByFocus && !isCurrentlyLockedByPause) {
+                    val reason = "Terdeteksi aplikasi dijeda atau berpindah ke latar belakang."
+                    activityMonitorChannelInstance.invokeMethod("lockApp", reason)
+                    isCurrentlyLockedByPause = true
                 }
             }, 300)
         }
@@ -143,3 +147,4 @@ class MainActivity: FlutterActivity() {
         }
     }
 }
+
