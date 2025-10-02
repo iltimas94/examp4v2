@@ -2,6 +2,7 @@ import 'dart:async'; // Import untuk StreamController
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:http/http.dart' as http; // Ditambahkan untuk HTTP requests
 
 // --- SERVICE UNTUK FITUR NATIVE ---
 class NativeSecureFlagService {
@@ -88,7 +89,6 @@ class ExamBrowserApp extends StatelessWidget {
         primarySwatch: Colors.blue,
       ),
       debugShowCheckedModeBanner: false,
-      // Ubah home menjadi TokenScreen
       home: const TokenScreen(),
     );
   }
@@ -104,14 +104,93 @@ class TokenScreen extends StatefulWidget {
 
 class _TokenScreenState extends State<TokenScreen> {
   final TextEditingController _tokenController = TextEditingController();
-  final String _correctExamToken = "1234"; // SANGAT TIDAK AMAN
+  String? _correctExamToken; // Diubah untuk mengambil dari online
   String _tokenError = "";
+  bool _isLoadingToken = true;
+  String _fetchError = "";
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchExamToken();
+  }
+
+  Future<void> _fetchExamToken() async {
+    setState(() {
+      _isLoadingToken = true;
+      _fetchError = "";
+      _tokenError = ""; // Reset token validation error
+    });
+    try {
+      // Pastikan spreadsheet Anda "public on the web" atau "anyone with the link can view"
+      // Spreadsheet URL: https://docs.google.com/spreadsheets/d/1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ/edit?gid=0#gid=0
+      // URL untuk CSV export:
+      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String gid = '0';
+      const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
+      
+      final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        // Asumsi token ada di sel A1 dan merupakan satu-satunya konten, atau baris pertama.
+        // Hapus whitespace atau newline yang mungkin ada.
+        String fetchedToken = response.body.trim();
+        // Jika CSV memiliki header, Anda mungkin perlu memprosesnya lebih lanjut
+        // Contoh: jika token ada di baris kedua setelah header:
+        // final lines = response.body.split('\n');
+        // if (lines.length > 1) fetchedToken = lines[1].trim(); else fetchedToken = "";
+
+        if (fetchedToken.isNotEmpty) {
+          // Anda bisa menambahkan validasi format token di sini jika perlu
+          // Misalnya, jika token seharusnya hanya angka atau memiliki panjang tertentu.
+          // Untuk saat ini, kita anggap token yang diambil dari sheet adalah benar.
+          final potentialToken = fetchedToken.split(',')[0].trim(); // Ambil kolom pertama jika ada beberapa kolom
+
+          if (potentialToken.isNotEmpty) {
+             _correctExamToken = potentialToken;
+             debugPrint("Token berhasil diambil: $_correctExamToken");
+          } else {
+            _fetchError = "Format token di spreadsheet tidak valid atau kosong.";
+             debugPrint("Token kosong setelah parsing dari CSV.");
+          }
+        } else {
+          _fetchError = "Token tidak ditemukan di spreadsheet (konten kosong).";
+          debugPrint("Respon CSV kosong.");
+        }
+      } else {
+        _fetchError = "Gagal mengambil token (Status: ${response.statusCode}). Pastikan spreadsheet dapat diakses publik.";
+        debugPrint("Gagal fetch token: ${response.statusCode}, Body: ${response.body}");
+      }
+    } catch (e) {
+      _fetchError = "Error mengambil token: $e. Periksa koneksi internet Anda.";
+      debugPrint("Exception saat fetch token: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingToken = false;
+        });
+      }
+    }
+  }
 
   void _validateToken() {
-    setState(() { // Untuk update UI jika ada error
+    if (_isLoadingToken) {
+      setState(() {
+        _tokenError = "Token sedang dimuat, harap tunggu.";
+      });
+      return;
+    }
+
+    if (_correctExamToken == null || _correctExamToken!.isEmpty) {
+      setState(() {
+        _tokenError = "Tidak dapat memvalidasi. $_fetchError";
+      });
+      return;
+    }
+
+    setState(() {
       if (_tokenController.text == _correctExamToken) {
         _tokenError = "";
-        // Navigasi ke ExamScreen setelah token benar
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const ExamContentScreen()),
         );
@@ -131,6 +210,63 @@ class _TokenScreenState extends State<TokenScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingToken) {
+      return Scaffold(
+        backgroundColor: Colors.grey[200],
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_fetchError.isNotEmpty && _correctExamToken == null) {
+      return Scaffold(
+        backgroundColor: Colors.grey[200],
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(30.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Icon(Icons.error_outline, color: Colors.red[700], size: 80),
+                const SizedBox(height: 20),
+                Text(
+                  'Gagal Memuat Konfigurasi',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red[800],
+                  ),
+                ),
+                const SizedBox(height: 15),
+                Text(
+                  _fetchError,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey[700], fontSize: 16),
+                ),
+                const SizedBox(height: 30),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8.0),
+                    ),
+                  ),
+                  onPressed: _fetchExamToken,
+                  icon: const Icon(Icons.refresh, color: Colors.white),
+                  label: const Text(
+                    'Coba Lagi',
+                    style: TextStyle(fontSize: 18, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.grey[200],
       body: Center(
@@ -143,7 +279,7 @@ class _TokenScreenState extends State<TokenScreen> {
               Icon(Icons.vpn_key, size: 80, color: Colors.blue[700]),
               const SizedBox(height: 20),
               Text(
-                'Masukkan Token Ujian',
+                'Masukkan Token',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 24,
@@ -154,8 +290,8 @@ class _TokenScreenState extends State<TokenScreen> {
               const SizedBox(height: 30),
               TextField(
                 controller: _tokenController,
-                obscureText: true,
-                keyboardType: TextInputType.text, // Bisa juga number jika token hanya angka
+                obscureText: false, // Diubah menjadi false
+                keyboardType: TextInputType.text,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 18),
                 decoration: InputDecoration(
@@ -168,6 +304,7 @@ class _TokenScreenState extends State<TokenScreen> {
                   filled: true,
                   fillColor: Colors.white,
                 ),
+                onSubmitted: (_) => _validateToken(), // Memungkinkan submit dengan enter
               ),
               const SizedBox(height: 25),
               ElevatedButton(
@@ -178,7 +315,8 @@ class _TokenScreenState extends State<TokenScreen> {
                     borderRadius: BorderRadius.circular(8.0),
                   ),
                 ),
-                onPressed: _validateToken,
+                // Tombol dinonaktifkan jika token belum siap atau ada error fetch
+                onPressed: (_correctExamToken == null || _correctExamToken!.isEmpty) ? null : _validateToken,
                 child: const Text(
                   'Masuk Ujian',
                   style: TextStyle(fontSize: 18, color: Colors.white),
@@ -209,18 +347,15 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   StreamSubscription? _lockReasonSubscription;
 
   final TextEditingController _adminCodeController = TextEditingController();
-  final String _correctAdminCode = "1234";
+  final String _correctAdminCode = "1234"; // TODO: Amankan kode admin ini
   String _adminCodeError = "";
 
   @override
   void initState() {
     super.initState();
-    // Pindahkan _initializeExamMode ke sini, setelah token divalidasi
-    // dan layar ini benar-benar ditampilkan
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeExamMode();
     });
-
 
     _lockReasonSubscription = ActivityMonitorService.lockReasonStream.listen((reason) {
       if (mounted) {
@@ -271,7 +406,7 @@ Page resource error:
           },
         ),
       )
-      ..loadRequest(Uri.parse(examUrl)); // WebView dimuat di sini
+      ..loadRequest(Uri.parse(examUrl));
   }
 
   Future<void> _initializeExamMode() async {
@@ -305,7 +440,7 @@ Page resource error:
   void dispose() {
     _lockReasonSubscription?.cancel();
     _adminCodeController.dispose();
-    _exitExamMode(); // Penting untuk memanggil ini saat layar konten ujian di-dispose
+    _exitExamMode();
     super.dispose();
   }
 
@@ -334,8 +469,6 @@ Page resource error:
       child: Scaffold(
         body: Stack(
           children: [
-            // Hanya tampilkan WebView jika tidak ada alasan untuk lock
-            // (Ini sudah ditangani oleh Stack dan kondisi di bawahnya)
             WebViewWidget(controller: _controller),
 
             if (isActuallyLocked)
@@ -351,7 +484,7 @@ Page resource error:
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.lock, color: Colors.red, size: 80),
+                          const Icon(Icons.lock, color: Colors.red, size: 80),
                           const SizedBox(height: 20),
                           const Text(
                             'Aplikasi Terkunci!',

@@ -31,6 +31,7 @@ dependencies:
   flutter:
     sdk: flutter
   webview_flutter: ^4.7.0 # Ganti dengan versi terbaru
+  http: ^1.2.0 # Atau versi terbaru
   # Untuk Kiosk Mode (mungkin memerlukan penyesuaian platform-specific)
   # Tidak ada plugin Flutter tunggal yang sempurna untuk Kiosk Mode lintas platform.
   # Anda mungkin perlu menggunakan package seperti `flutter_windowmanager` untuk beberapa fitur
