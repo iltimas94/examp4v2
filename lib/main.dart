@@ -467,6 +467,15 @@ Page resource error:
         return false;
       },
       child: Scaffold(
+        // Tambahkan tombol refresh di sini
+        floatingActionButton: isActuallyLocked
+            ? null // Sembunyikan tombol saat terkunci
+            : FloatingActionButton(
+                onPressed: () => _controller.reload(),
+                backgroundColor: Colors.blue,
+                child: const Icon(Icons.refresh, color: Colors.white),
+              ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.startFloat, // Posisi di kiri bawah
         body: Stack(
           children: [
             WebViewWidget(controller: _controller),
