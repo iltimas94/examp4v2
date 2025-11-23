@@ -1,45 +1,38 @@
-import 'dart:async'; // Import untuk StreamController
-import 'dart:io'; // Import untuk Platform
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_sign_in/google_sign_in.dart';
+import 'package:upgrader/upgrader.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:http/http.dart' as http; // Ditambahkan untuk HTTP requests
-import 'package:intl/intl.dart'; // Import untuk format tanggal dan waktu
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 
-
-// --- MODELS ---
+// --- KELAS MODEL ---
 class Exam {
-  final String image;
-  final String mapel;
-  final String waktu;
-  final String link;
-
+  final String image, mapel, waktu, link;
   Exam({required this.image, required this.mapel, required this.waktu, required this.link});
 }
 
-// --- SERVICE UNTUK FITUR NATIVE ---
+// --- KELAS-KELAS SERVICE NATIVE ---
 class NativeSecureFlagService {
-  static const platform = MethodChannel('com.example.exam_browser/secure_flag');
-
+  static const _platform = MethodChannel('com.example.exam_browser/secure_flag');
   static Future<void> setSecureFlag() async {
     if (kIsWeb || !Platform.isAndroid) return;
     try {
-      await platform.invokeMethod('setSecureFlag');
-      debugPrint("Native secure flag set successfully");
+      await _platform.invokeMethod('setSecureFlag');
     } on PlatformException catch (e) {
-      debugPrint("Failed to set native secure flag: '${e.message}'.");
+      debugPrint("Failed to set secure flag: ${e.message}");
     }
   }
 
   static Future<void> clearSecureFlag() async {
     if (kIsWeb || !Platform.isAndroid) return;
     try {
-      await platform.invokeMethod('clearSecureFlag');
-      debugPrint("Native secure flag cleared successfully");
+      await _platform.invokeMethod('clearSecureFlag');
     } on PlatformException catch (e) {
-      debugPrint("Failed to clear native secure flag: '${e.message}'.");
+      debugPrint("Failed to clear secure flag: ${e.message}");
     }
   }
 }
@@ -54,9 +47,8 @@ class ActivityMonitorService {
     _platform.setMethodCallHandler(_handleNativeCall);
     try {
       await _platform.invokeMethod('startMonitoring');
-      debugPrint("Activity monitoring initialized");
     } on PlatformException catch (e) {
-      debugPrint("Failed to initialize activity monitoring: '${e.message}'.");
+      debugPrint("Failed to initialize activity monitoring: ${e.message}");
     }
   }
 
@@ -64,25 +56,19 @@ class ActivityMonitorService {
     if (kIsWeb || !Platform.isAndroid) return;
     try {
       await _platform.invokeMethod('stopMonitoring');
-      debugPrint("Activity monitoring stopped");
     } on PlatformException catch (e) {
-      debugPrint("Failed to stop activity monitoring: '${e.message}'.");
+      debugPrint("Failed to stop activity monitoring: ${e.message}");
     }
   }
 
   static Future<dynamic> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
       case 'lockApp':
-        final String? reason = call.arguments as String?;
-        _lockAppController.add(reason ?? "Aktivitas mencurigakan terdeteksi.");
-        debugPrint("Native requested app lock. Reason: $reason");
+        _lockAppController.add(call.arguments as String? ?? "Aktivitas mencurigakan terdeteksi.");
         break;
       case 'unlockApp':
         _lockAppController.add(null);
-        debugPrint("Native requested app unlock.");
         break;
-      default:
-        debugPrint('Unknown method ${call.method}');
     }
   }
 
@@ -91,25 +77,24 @@ class ActivityMonitorService {
   }
 }
 
+// --- FUNGSI MAIN ---
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const ExamBrowserApp());
 }
 
+// --- APLIKASI UTAMA ---
 class ExamBrowserApp extends StatelessWidget {
   const ExamBrowserApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Exam Browser',
+      title: 'ExBrowser 4',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         scaffoldBackgroundColor: Colors.grey[100],
-        cardTheme: CardThemeData(
-          elevation: 8,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        ),
+        cardTheme: CardThemeData(elevation: 8, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.blue,
@@ -121,11 +106,17 @@ class ExamBrowserApp extends StatelessWidget {
         ),
       ),
       debugShowCheckedModeBanner: false,
-      home: const TokenScreen(),
+      home: UpgradeAlert(
+        upgrader: Upgrader(),
+        dialogStyle: UpgradeDialogStyle.material,
+        canDismissDialog: false,
+        child: const TokenScreen(),
+      ),
     );
   }
 }
 
+// --- HALAMAN TOKEN ---
 class TokenScreen extends StatefulWidget {
   const TokenScreen({super.key});
 
@@ -133,28 +124,63 @@ class TokenScreen extends StatefulWidget {
   State<TokenScreen> createState() => _TokenScreenState();
 }
 
-class _TokenScreenState extends State<TokenScreen> {
+class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
   static const dndChannel = MethodChannel('com.example.exam_browser/dnd');
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
-
   final TextEditingController _tokenController = TextEditingController();
   String? _correctExamToken;
   String _tokenError = "";
   bool _isLoading = true;
   String _fetchError = "";
   String _examNote = "";
+  bool _isDndPermissionGranted = false;
 
   @override
   void initState() {
     super.initState();
-    _refreshData();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermissionsAndLoad();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkDndPermission();
+    }
+  }
+
+  Future<void> _checkPermissionsAndLoad() async {
+    await _checkDndPermission();
+    if (_isDndPermissionGranted) {
+      _refreshData();
+    }
+  }
+
+  Future<void> _checkDndPermission() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      if (mounted) setState(() => _isDndPermissionGranted = true);
+      return;
+    }
+    try {
+      final bool? granted = await dndChannel.invokeMethod('checkDndPermission');
+      if (mounted) {
+        setState(() {
+          _isDndPermissionGranted = granted ?? false;
+          if (!_isDndPermissionGranted) {
+            _isLoading = false;
+          }
+        });
+      }
+    } on PlatformException {
+      if (mounted) setState(() => _isDndPermissionGranted = false);
+    }
   }
 
   Future<void> _requestDndPermission() async {
+    if (kIsWeb || !Platform.isAndroid) return;
     try {
       await dndChannel.invokeMethod('requestDndPermission');
     } on PlatformException catch (e) {
-      debugPrint("Failed to request DND permission: '${e.message}'.");
+      debugPrint("Failed to request DND permission: ${e.message}");
     }
   }
 
@@ -180,16 +206,13 @@ class _TokenScreenState extends State<TokenScreen> {
           if (note.startsWith('"') && note.endsWith('"')) {
             note = note.substring(1, note.length - 1);
           }
-          setState(() {
-            _examNote = note.replaceAll('""', '"');
-          });
+          setState(() => _examNote = note.replaceAll('""', '"'));
         } else {
-          _examNote = "Gagal memuat catatan.";
+          setState(() => _examNote = "Gagal memuat catatan.");
         }
       }
     } catch (e) {
-      debugPrint("Failed to fetch note: $e");
-      if (mounted) _examNote = "Gagal memuat catatan.";
+      if (mounted) setState(() => _examNote = "Gagal memuat catatan.");
     }
   }
 
@@ -212,65 +235,68 @@ class _TokenScreenState extends State<TokenScreen> {
         }
       }
     } catch (e) {
-      _fetchError = "Error mengambil token. Periksa koneksi internet Anda.";
+      if (mounted) _fetchError = "Error mengambil token. Periksa koneksi internet Anda.";
     }
   }
 
-  Future<void> _handleSignInAndEnter() async {
-    // 1. Validasi Token
-    if (_tokenController.text != _correctExamToken) {
-      setState(() {
-        _tokenError = "Token ujian salah.";
-      });
-      HapticFeedback.mediumImpact();
-      return;
-    }
-    setState(() => _tokenError = "");
-
-    // 2. Proses Login Google
-    try {
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
-      if (googleUser == null) {
-        // Pengguna membatalkan login
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Login dengan Google dibatalkan.')),
-        );
-        return;
-      }
-
-      // 3. Navigasi ke Daftar Ujian
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const ExamListScreen()),
-        );
-      }
-    } catch (error) {
-      debugPrint("Google Sign-In Error: $error");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal login dengan Google: $error')),
+  void _validateToken() {
+    if (_tokenController.text == _correctExamToken) {
+      setState(() => _tokenError = "");
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const ExamListScreen()),
       );
+    } else {
+      setState(() => _tokenError = "Token ujian salah.");
+      _tokenController.clear();
+      HapticFeedback.mediumImpact();
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tokenController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (!_isDndPermissionGranted && Platform.isAndroid) {
       return Scaffold(
-        body: const Center(child: CircularProgressIndicator()),
-        floatingActionButton: FloatingActionButton(
-          onPressed: _refreshData,
-          child: const Icon(Icons.refresh),
+        body: Padding(
+          padding: const EdgeInsets.all(30.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Icon(Icons.notifications_off, color: Colors.blue[700], size: 80),
+              const SizedBox(height: 20),
+              const Text('Izin Diperlukan', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 15),
+              const Text(
+                'Untuk kelancaran ujian, aplikasi ini memerlukan izin untuk mengaktifkan mode \"Jangan Ganggu\". Mohon aktifkan izin pada halaman pengaturan berikutnya.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: Colors.black54),
+              ),
+              const SizedBox(height: 30),
+              ElevatedButton.icon(
+                onPressed: _requestDndPermission,
+                icon: const Icon(Icons.settings),
+                label: const Text('Buka Pengaturan'),
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    // Tampilan jika ada error saat fetch data awal
+    if (_isLoading) {
+      return Scaffold(
+        body: const Center(child: CircularProgressIndicator()),
+        floatingActionButton: FloatingActionButton(onPressed: _refreshData, child: const Icon(Icons.refresh)),
+      );
+    }
+
     if (_fetchError.isNotEmpty && _correctExamToken == null) {
        return Scaffold(
         body: Center(
@@ -295,10 +321,7 @@ class _TokenScreenState extends State<TokenScreen> {
     }
 
     return Scaffold(
-      floatingActionButton: FloatingActionButton(
-        onPressed: _refreshData,
-        child: const Icon(Icons.refresh),
-      ),
+      floatingActionButton: FloatingActionButton(onPressed: _refreshData, child: const Icon(Icons.refresh)),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -328,13 +351,12 @@ class _TokenScreenState extends State<TokenScreen> {
                           filled: true,
                           fillColor: Colors.white,
                         ),
-                        onSubmitted: (_) => _handleSignInAndEnter(),
+                        onSubmitted: (_) => _validateToken(),
                       ),
                       const SizedBox(height: 20),
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.login), 
-                        label: const Text('Masuk dengan Google'),
-                        onPressed: _handleSignInAndEnter,
+                      ElevatedButton(
+                        onPressed: _validateToken,
+                        child: const Text('Masuk'),
                       ),
                     ],
                   ),
@@ -364,10 +386,8 @@ class _TokenScreenState extends State<TokenScreen> {
   }
 }
 
-
 class ExamListScreen extends StatefulWidget {
   const ExamListScreen({super.key});
-
   @override
   State<ExamListScreen> createState() => _ExamListScreenState();
 }
@@ -405,10 +425,8 @@ class _ExamListScreenState extends State<ExamListScreen> {
               ));
             }
           }
-          setState(() {
-            _exams = exams;
-          });
-        }
+          setState(() => _exams = exams);
+        } 
       }
     } catch (e) {
       // handle error
@@ -493,7 +511,7 @@ class ExamContentScreen extends StatefulWidget {
 }
 
 class _ExamContentScreenState extends State<ExamContentScreen> {
-  WebViewController? _controller;
+  late final WebViewController _controller;
   String? _lockReason;
   StreamSubscription? _lockReasonSubscription;
   late Timer _timer;
@@ -508,33 +526,40 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   @override
   void initState() {
     super.initState();
+
+    late final PlatformWebViewControllerCreationParams params;
+    if (WebViewPlatform.instance is AndroidWebViewPlatform) {
+      params = AndroidWebViewControllerCreationParams();
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    final WebViewController controller = WebViewController.fromPlatformCreationParams(params);
+    
+    _controller = controller
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (String url) {},
+          onNavigationRequest: (NavigationRequest request) {
+            if (_lockReason != null) return NavigationDecision.prevent;
+            if (request.url.startsWith(widget.examUrl) || request.url.contains(".google.com")) {
+              return NavigationDecision.navigate;
+            }
+            return NavigationDecision.prevent;
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(widget.examUrl));
+
+    if (controller.platform is AndroidWebViewController) {
+        (controller.platform as AndroidWebViewController).setMediaPlaybackRequiresUserGesture(false);
+    }
+
     _fetchAdminCode();
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) => _updateTime());
-
-    if (_isWebViewSupported) {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(const Color(0x00000000))
-        ..setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onProgress: (int progress) {},
-            onPageStarted: (String url) {},
-            onPageFinished: (String url) {},
-            onWebResourceError: (WebResourceError error) {},
-            onNavigationRequest: (NavigationRequest request) {
-              if (_lockReason != null) return NavigationDecision.prevent;
-              final allowedDomains = [widget.examUrl, "https://accounts.google.com"];
-              if (allowedDomains.any((domain) => request.url.startsWith(domain))) {
-                return NavigationDecision.navigate;
-              }
-              return NavigationDecision.prevent;
-            },
-          ),
-        )
-        ..loadRequest(Uri.parse(widget.examUrl));
-    }
 
     _lockReasonSubscription = ActivityMonitorService.lockReasonStream.listen((reason) {
       if (mounted) {
@@ -627,14 +652,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
             title: const Text('Kembali ke Daftar Ujian?'),
             content: const Text('Apakah Anda yakin ingin keluar dari ujian ini?'),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Batal'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Yakin'),
-              ),
+              TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Batal')),
+              TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Yakin')),
             ],
           ),
         );
@@ -644,15 +663,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
         appBar: AppBar(
           title: const Text('Ujian'),
           actions: [
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: Text(
-                  _currentTime,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ),
+            Center(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Text(_currentTime, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)))),
             if(_isWebViewSupported)
               IconButton(
                 icon: const Icon(Icons.refresh),
@@ -663,23 +674,13 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                       title: const Text('Refresh Halaman?'),
                       content: const Text('Apakah Anda yakin ingin memuat ulang halaman ujian? Progres yang belum tersimpan mungkin akan hilang.'),
                       actions: <Widget>[
-                        TextButton(
-                          child: const Text('Batal'),
-                          onPressed: () {
-                            Navigator.of(context).pop(false);
-                          },
-                        ),
-                        TextButton(
-                          child: const Text('Ya, Refresh'),
-                          onPressed: () {
-                            Navigator.of(context).pop(true);
-                          },
-                        ),
+                        TextButton(child: const Text('Batal'), onPressed: () => Navigator.of(context).pop(false)),
+                        TextButton(child: const Text('Ya, Refresh'), onPressed: () => Navigator.of(context).pop(true)),
                       ],
                     ),
                   );
                   if (shouldReload ?? false) {
-                    _controller?.reload();
+                    _controller.reload();
                   }
                 },
               ),
@@ -692,14 +693,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                     title: const Text('Kembali ke Halaman Awal?'),
                     content: const Text('Apakah Anda yakin ingin keluar dari sesi ujian dan kembali ke halaman token?'),
                     actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        child: const Text('Batal'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(true),
-                        child: const Text('Yakin'),
-                      ),
+                      TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Batal')),
+                      TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Yakin')),
                     ],
                   ),
                 );
@@ -715,17 +710,13 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
         ),
         body: Stack(
           children: [
-            if (_isWebViewSupported && _controller != null)
-              WebViewWidget(controller: _controller!)
+            if (_isWebViewSupported)
+              WebViewWidget(controller: _controller)
             else
-              const Center(
-                child: Text('Fitur ujian tidak didukung di platform ini.'),
-              ),
+              const Center(child: Text('Fitur ujian tidak didukung di platform ini.')),
             if (isActuallyLocked)
               GestureDetector(
-                onTap: () {
-                  FocusScope.of(context).unfocus();
-                },
+                onTap: () => FocusScope.of(context).unfocus(),
                 child: Container(
                   color: Colors.black.withOpacity(0.90),
                   child: Center(
@@ -736,16 +727,9 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                         children: [
                           const Icon(Icons.lock, color: Colors.red, size: 80),
                           const SizedBox(height: 20),
-                          const Text(
-                            'Aplikasi Terkunci!',
-                            style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-                          ),
+                          const Text('Aplikasi Terkunci!', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 15),
-                          const Text(
-                            'Silakan hubungi pengawas atau masukkan kode admin.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white, fontSize: 16),
-                          ),
+                          const Text('Silakan hubungi pengawas atau masukkan kode admin.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 16)),
                           const SizedBox(height: 30),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 40.0),
@@ -757,12 +741,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                               decoration: InputDecoration(
                                 labelText: 'Kode Admin',
                                 labelStyle: const TextStyle(color: Colors.white70),
-                                enabledBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Colors.white54),
-                                ),
-                                focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Colors.blue),
-                                ),
+                                enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.white54)),
+                                focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.blue)),
                                 errorText: _adminCodeError.isNotEmpty ? _adminCodeError : null,
                                 errorStyle: const TextStyle(color: Colors.orangeAccent, fontSize: 14),
                               ),
@@ -770,19 +750,12 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                             ),
                           ),
                           const SizedBox(height: 20),
-                          ElevatedButton(
-                            onPressed: _attemptUnlock,
-                            child: const Text("Buka Kunci"),
-                          ),
+                          ElevatedButton(onPressed: _attemptUnlock, child: const Text("Buka Kunci")),
                            const SizedBox(height: 20),
                            if (_lockReason != null)
                              Padding(
                                padding: const EdgeInsets.only(top: 15.0),
-                               child: Text(
-                                 _lockReason!,
-                                 textAlign: TextAlign.center,
-                                 style: const TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic),
-                               ),
+                               child: Text(_lockReason!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)),
                              ),
                         ],
                       ),

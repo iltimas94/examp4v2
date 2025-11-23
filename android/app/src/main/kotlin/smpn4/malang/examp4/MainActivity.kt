@@ -35,7 +35,6 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Handler untuk FLAG_SECURE
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SECURE_FLAG_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setSecureFlag" -> {
@@ -50,7 +49,6 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        // Handler untuk Activity Monitor
         activityMonitorChannelInstance = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACTIVITY_MONITOR_CHANNEL)
         activityMonitorChannelInstance.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -61,23 +59,20 @@ class MainActivity: FlutterActivity() {
                     initialSystemUiVisibility = window.decorView.systemUiVisibility
                     hideSystemUI()
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    setDndMode(true) // Aktifkan DND
+                    setDndMode(true)
                     result.success("Activity monitoring started")
-                    Log.d("ActivityMonitor", "Monitoring started, DND activated")
                 }
                 "stopMonitoring" -> {
                     isMonitoringActivity = false
                     showSystemUI(initialSystemUiVisibility)
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    setDndMode(false) // Nonaktifkan DND
+                    setDndMode(false)
                     result.success("Activity monitoring stopped")
-                    Log.d("ActivityMonitor", "Monitoring stopped, DND deactivated")
                 }
                 else -> result.notImplemented()
             }
         }
 
-        // Channel baru untuk mengelola izin DND dari Flutter
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DND_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "requestDndPermission" -> {
@@ -87,6 +82,15 @@ class MainActivity: FlutterActivity() {
                         startActivity(intent)
                     }
                     result.success(null)
+                }
+                "checkDndPermission" -> {
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        notificationManager.isNotificationPolicyAccessGranted
+                    } else {
+                        true // Dianggap sudah ada di versi Android lama
+                    }
+                    result.success(granted)
                 }
                 else -> result.notImplemented()
             }
@@ -98,20 +102,14 @@ class MainActivity: FlutterActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!notificationManager.isNotificationPolicyAccessGranted) {
                 Log.w("DND", "Izin 'Jangan Ganggu' belum diberikan.")
-                // Opsional: Buka pengaturan jika izin belum ada saat ujian dimulai
-                // val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-                // startActivity(intent)
                 return
             }
 
             if (enable) {
-                // Simpan state DND saat ini sebelum mengubahnya
                 previousDndState = notificationManager.currentInterruptionFilter
-                // Aktifkan mode Jangan Ganggu total (semua diblok)
                 notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
                 Log.d("DND", "Mode 'Jangan Ganggu' diaktifkan.")
             } else {
-                // Kembalikan state DND ke state sebelumnya
                 if (previousDndState != -1) {
                     notificationManager.setInterruptionFilter(previousDndState)
                     Log.d("DND", "Mode 'Jangan Ganggu' dikembalikan ke normal.")
@@ -119,7 +117,8 @@ class MainActivity: FlutterActivity() {
             }
         }
     }
-
+    
+    // Sisa file tetap sama
     private fun hideSystemUI() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.insetsController?.let {
@@ -169,7 +168,7 @@ class MainActivity: FlutterActivity() {
 
         if (isMonitoringActivity) {
             isAppInFocus = hasFocus
-            if (!hasFocus && !isInMultiWindowMode) { // Hanya kunci jika bukan karena multi-window
+            if (!hasFocus && !isInMultiWindowMode) {
                 handler.postDelayed({
                     if (!isAppInFocus) {
                         lockApp("Terdeteksi kehilangan fokus jendela.")
@@ -190,7 +189,6 @@ class MainActivity: FlutterActivity() {
 
         if (isMonitoringActivity && !isFinishing) {
             isAppInFocus = false
-            // Pengecekan utama untuk multi-window saat jeda
             handler.postDelayed({ checkMultiWindowAndLock() }, 100)
         }
     }
@@ -200,10 +198,7 @@ class MainActivity: FlutterActivity() {
         if (isMonitoringActivity) {
             isAppInFocus = true
             hideSystemUI()
-
-            // Pengecekan multi-window saat aplikasi kembali aktif
             checkMultiWindowAndLock()
-
             if (isCurrentlyLocked && !isInMultiWindowMode) {
                 isCurrentlyLocked = false
             }

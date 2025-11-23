@@ -50,7 +50,9 @@ android {
 
     buildTypes {
         getByName("release") {
-            // Menggunakan konfigurasi signing yang sudah kita buat.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
         }
     }
