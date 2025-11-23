@@ -3,8 +3,11 @@ import 'dart:io'; // Import untuk Platform
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:http/http.dart' as http; // Ditambahkan untuk HTTP requests
+import 'package:intl/intl.dart'; // Import untuk format tanggal dan waktu
+
 
 // --- MODELS ---
 class Exam {
@@ -110,7 +113,7 @@ class ExamBrowserApp extends StatelessWidget {
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.blue,
-            foregroundColor: Colors.white, // Menentukan warna teks dan ikon di dalam tombol
+            foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 30),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -123,7 +126,6 @@ class ExamBrowserApp extends StatelessWidget {
   }
 }
 
-// --- WIDGET BARU UNTUK LAYAR TOKEN ---
 class TokenScreen extends StatefulWidget {
   const TokenScreen({super.key});
 
@@ -132,13 +134,15 @@ class TokenScreen extends StatefulWidget {
 }
 
 class _TokenScreenState extends State<TokenScreen> {
+  static const dndChannel = MethodChannel('com.example.exam_browser/dnd');
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
+
   final TextEditingController _tokenController = TextEditingController();
   String? _correctExamToken;
   String _tokenError = "";
-  bool _isLoadingToken = true;
+  bool _isLoading = true;
   String _fetchError = "";
   String _examNote = "";
-  bool _isNoteLoading = true;
 
   @override
   void initState() {
@@ -146,114 +150,106 @@ class _TokenScreenState extends State<TokenScreen> {
     _refreshData();
   }
 
+  Future<void> _requestDndPermission() async {
+    try {
+      await dndChannel.invokeMethod('requestDndPermission');
+    } on PlatformException catch (e) {
+      debugPrint("Failed to request DND permission: '${e.message}'.");
+    }
+  }
+
   Future<void> _refreshData() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
     await _fetchExamToken();
     await _fetchExamNote();
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _fetchExamNote() async {
     try {
-      setState(() => _isNoteLoading = true);
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
       const String gid = '1478015243';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
-      if (response.statusCode == 200) {
-        String note = response.body.trim();
-        if (note.startsWith('"') && note.endsWith('"')) {
-          note = note.substring(1, note.length - 1);
-        }
-        if (mounted) {
+      if (mounted) {
+        if (response.statusCode == 200) {
+          String note = response.body.trim();
+          if (note.startsWith('"') && note.endsWith('"')) {
+            note = note.substring(1, note.length - 1);
+          }
           setState(() {
             _examNote = note.replaceAll('""', '"');
           });
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            _examNote = "Gagal memuat catatan.";
-          });
+        } else {
+          _examNote = "Gagal memuat catatan.";
         }
       }
     } catch (e) {
       debugPrint("Failed to fetch note: $e");
-      if (mounted) {
-        setState(() {
-          _examNote = "Gagal memuat catatan.";
-        });
-      }
-    } finally {
-      if(mounted) {
-        setState(() => _isNoteLoading = false);
-      }
+      if (mounted) _examNote = "Gagal memuat catatan.";
     }
   }
 
   Future<void> _fetchExamToken() async {
-    setState(() {
-      _isLoadingToken = true;
-      _fetchError = "";
-      _tokenError = "";
-    });
     try {
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
       const String gid = '0';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        String fetchedToken = response.body.trim();
-        if (fetchedToken.isNotEmpty) {
-          final potentialToken = fetchedToken.split(',')[0].trim();
-          if (potentialToken.isNotEmpty) {
-             _correctExamToken = potentialToken;
+      if (mounted) {
+        if (response.statusCode == 200) {
+          String fetchedToken = response.body.trim();
+          if (fetchedToken.isNotEmpty) {
+            _correctExamToken = fetchedToken.split(',')[0].trim();
           } else {
-            _fetchError = "Format token di spreadsheet tidak valid atau kosong.";
+            _fetchError = "Token tidak ditemukan di spreadsheet.";
           }
         } else {
-          _fetchError = "Token tidak ditemukan di spreadsheet (konten kosong).";
+          _fetchError = "Gagal mengambil token (Status: ${response.statusCode}).";
         }
-      } else {
-        _fetchError = "Gagal mengambil token (Status: ${response.statusCode}). Pastikan spreadsheet dapat diakses publik.";
       }
     } catch (e) {
-      _fetchError = "Error mengambil token: $e. Periksa koneksi internet Anda.";
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingToken = false;
-        });
-      }
+      _fetchError = "Error mengambil token. Periksa koneksi internet Anda.";
     }
   }
 
-  void _validateToken() {
-    if (_isLoadingToken) {
+  Future<void> _handleSignInAndEnter() async {
+    // 1. Validasi Token
+    if (_tokenController.text != _correctExamToken) {
       setState(() {
-        _tokenError = "Token sedang dimuat, harap tunggu.";
+        _tokenError = "Token ujian salah.";
       });
+      HapticFeedback.mediumImpact();
       return;
     }
+    setState(() => _tokenError = "");
 
-    if (_correctExamToken == null || _correctExamToken!.isEmpty) {
-      setState(() {
-        _tokenError = "Tidak dapat memvalidasi. $_fetchError";
-      });
-      return;
-    }
+    // 2. Proses Login Google
+    try {
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        // Pengguna membatalkan login
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Login dengan Google dibatalkan.')),
+        );
+        return;
+      }
 
-    setState(() {
-      if (_tokenController.text == _correctExamToken) {
-        _tokenError = "";
+      // 3. Navigasi ke Daftar Ujian
+      if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const ExamListScreen()),
         );
-      } else {
-        _tokenError = "Token ujian salah.";
-        _tokenController.clear();
-        HapticFeedback.mediumImpact();
       }
-    });
+    } catch (error) {
+      debugPrint("Google Sign-In Error: $error");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal login dengan Google: $error')),
+      );
+    }
   }
 
   @override
@@ -264,7 +260,7 @@ class _TokenScreenState extends State<TokenScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoadingToken) {
+    if (_isLoading) {
       return Scaffold(
         body: const Center(child: CircularProgressIndicator()),
         floatingActionButton: FloatingActionButton(
@@ -274,8 +270,9 @@ class _TokenScreenState extends State<TokenScreen> {
       );
     }
 
+    // Tampilan jika ada error saat fetch data awal
     if (_fetchError.isNotEmpty && _correctExamToken == null) {
-      return Scaffold(
+       return Scaffold(
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(30.0),
@@ -285,27 +282,11 @@ class _TokenScreenState extends State<TokenScreen> {
               children: [
                 Icon(Icons.error_outline, color: Colors.red[700], size: 80),
                 const SizedBox(height: 20),
-                Text(
-                  'Gagal Memuat Konfigurasi',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red[800],
-                  ),
-                ),
+                const Text('Gagal Memuat Konfigurasi', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.red)),
                 const SizedBox(height: 15),
-                Text(
-                  _fetchError,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey[700], fontSize: 16),
-                ),
+                Text(_fetchError, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[700], fontSize: 16)),
                 const SizedBox(height: 30),
-                ElevatedButton.icon(
-                  onPressed: _refreshData,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Coba Lagi'),
-                ),
+                ElevatedButton.icon(onPressed: _refreshData, icon: const Icon(Icons.refresh), label: const Text('Coba Lagi')),
               ],
             ),
           ),
@@ -326,10 +307,7 @@ class _TokenScreenState extends State<TokenScreen> {
             children: <Widget>[
               Image.asset('assets/images/logo_baru_sekolah.png', height: 180),
               const SizedBox(height: 20),
-              Text(
-                'Selamat Datang',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
-              ),
+              Text('Selamat Datang', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
               const SizedBox(height: 40),
               Card(
                 child: Padding(
@@ -346,38 +324,37 @@ class _TokenScreenState extends State<TokenScreen> {
                         decoration: InputDecoration(
                           hintText: 'Masukkan Token Ujian',
                           errorText: _tokenError.isNotEmpty ? _tokenError : null,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10.0),
-                          ),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.0)),
                           filled: true,
                           fillColor: Colors.white,
                         ),
-                        onSubmitted: (_) => _validateToken(),
+                        onSubmitted: (_) => _handleSignInAndEnter(),
                       ),
                       const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: (_correctExamToken == null || _correctExamToken!.isEmpty) ? null : _validateToken,
-                        child: const Text('Masuk'),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.login), 
+                        label: const Text('Masuk dengan Google'),
+                        onPressed: _handleSignInAndEnter,
                       ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 20),
-              if (_isNoteLoading)
-                const Center(child: CircularProgressIndicator())
-              else if (_examNote.isNotEmpty)
+              if (Platform.isAndroid)
+                Padding(
+                  padding: const EdgeInsets.only(top: 20),
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.notifications_off, size: 20),
+                    label: const Text("Aktifkan Izin Mode Fokus"),
+                    onPressed: _requestDndPermission,
+                    style: TextButton.styleFrom(foregroundColor: Colors.grey[700]),
+                  ),
+                ),
+              if (_examNote.isNotEmpty)
                  Padding(
                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                   child: Text(
-                      _examNote,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontStyle: FontStyle.italic,
-                        color: Colors.black54,
-                      ),
-                    ),
+                   child: Text(_examNote, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.black54)),
                  ),
             ],
           ),
@@ -387,7 +364,7 @@ class _TokenScreenState extends State<TokenScreen> {
   }
 }
 
-// --- WIDGET BARU UNTUK DAFTAR UJIAN ---
+
 class ExamListScreen extends StatefulWidget {
   const ExamListScreen({super.key});
 
@@ -406,37 +383,39 @@ class _ExamListScreenState extends State<ExamListScreen> {
   }
 
   Future<void> _fetchExams() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
     try {
-      setState(() => _isLoading = true);
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
       const String gid = '2003099256';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
-
       final response = await http.get(Uri.parse(csvUrl));
-
-      if (response.statusCode == 200) {
-        final lines = response.body.split('\r\n').skip(1);
-        final List<Exam> exams = [];
-        for (final line in lines) {
-          final parts = line.split(',');
-          if (parts.length >= 4) {
-            exams.add(Exam(
-              image: parts[0].trim(),
-              mapel: parts[1].trim(),
-              waktu: parts[2].trim(),
-              link: parts[3].trim(),
-            ));
+      if (mounted) {
+        if (response.statusCode == 200) {
+          final lines = response.body.split('\r\n').skip(1);
+          final List<Exam> exams = [];
+          for (final line in lines) {
+            final parts = line.split(',');
+            if (parts.length >= 4) {
+              exams.add(Exam(
+                image: parts[0].trim(),
+                mapel: parts[1].trim(),
+                waktu: parts[2].trim(),
+                link: parts[3].trim(),
+              ));
+            }
           }
+          setState(() {
+            _exams = exams;
+          });
         }
-        setState(() {
-          _exams = exams;
-          _isLoading = false;
-        });
-      } else {
-        setState(() => _isLoading = false);
       }
     } catch (e) {
-      setState(() => _isLoading = false);
+      // handle error
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -467,16 +446,11 @@ class _ExamListScreenState extends State<ExamListScreen> {
                 final exam = _exams[index];
                 return Card(
                   clipBehavior: Clip.antiAlias,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                   child: InkWell(
                     onTap: () {
                       Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              ExamContentScreen(examUrl: exam.link),
-                        ),
+                        MaterialPageRoute(builder: (context) => ExamContentScreen(examUrl: exam.link)),
                       );
                     },
                     child: Column(
@@ -486,10 +460,7 @@ class _ExamListScreenState extends State<ExamListScreen> {
                           child: Image.network(
                             exam.image,
                             fit: BoxFit.cover,
-                            errorBuilder: (c, o, s) => const Icon(
-                              Icons.error,
-                              size: 40,
-                            ),
+                            errorBuilder: (c, o, s) => const Icon(Icons.error, size: 40),
                           ),
                         ),
                         Padding(
@@ -497,13 +468,7 @@ class _ExamListScreenState extends State<ExamListScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                exam.mapel,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
+                              Text(exam.mapel, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                               const SizedBox(height: 4),
                               Text(exam.waktu, style: const TextStyle(fontSize: 12)),
                             ],
@@ -519,7 +484,6 @@ class _ExamListScreenState extends State<ExamListScreen> {
   }
 }
 
-// --- PISAHKAN LAYAR EXAM MENJADI EXAMCONTENTSCREEN ---
 class ExamContentScreen extends StatefulWidget {
   final String examUrl;
   const ExamContentScreen({super.key, required this.examUrl});
@@ -532,6 +496,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   WebViewController? _controller;
   String? _lockReason;
   StreamSubscription? _lockReasonSubscription;
+  late Timer _timer;
+  String _currentTime = '';
 
   final TextEditingController _adminCodeController = TextEditingController();
   String? _correctAdminCode;
@@ -543,11 +509,14 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   void initState() {
     super.initState();
     _fetchAdminCode();
+    _updateTime();
+    _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) => _updateTime());
 
     if (_isWebViewSupported) {
       _controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0x00000000))
+        ..setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         ..setNavigationDelegate(
           NavigationDelegate(
             onProgress: (int progress) {},
@@ -556,10 +525,11 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
             onWebResourceError: (WebResourceError error) {},
             onNavigationRequest: (NavigationRequest request) {
               if (_lockReason != null) return NavigationDecision.prevent;
-              if (!request.url.startsWith(widget.examUrl)) {
-                return NavigationDecision.prevent;
+              final allowedDomains = [widget.examUrl, "https://accounts.google.com"];
+              if (allowedDomains.any((domain) => request.url.startsWith(domain))) {
+                return NavigationDecision.navigate;
               }
-              return NavigationDecision.navigate;
+              return NavigationDecision.prevent;
             },
           ),
         )
@@ -579,6 +549,13 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     });
   }
 
+  void _updateTime() {
+    if (!mounted) return;
+    setState(() {
+      _currentTime = DateFormat('HH:mm:ss').format(DateTime.now());
+    });
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -591,9 +568,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
       const String gid = '1460373020';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
-
-      if (response.statusCode == 200) {
-        if (mounted) {
+      if (mounted) {
+        if (response.statusCode == 200) {
           setState(() {
             _correctAdminCode = response.body.trim();
           });
@@ -632,6 +608,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
 
   @override
   void dispose() {
+    _timer.cancel();
     _lockReasonSubscription?.cancel();
     _adminCodeController.dispose();
     _exitExamMode();
@@ -667,10 +644,44 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
         appBar: AppBar(
           title: const Text('Ujian'),
           actions: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Text(
+                  _currentTime,
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
             if(_isWebViewSupported)
               IconButton(
                 icon: const Icon(Icons.refresh),
-                onPressed: () => _controller?.reload(),
+                onPressed: () async {
+                  final bool? shouldReload = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Refresh Halaman?'),
+                      content: const Text('Apakah Anda yakin ingin memuat ulang halaman ujian? Progres yang belum tersimpan mungkin akan hilang.'),
+                      actions: <Widget>[
+                        TextButton(
+                          child: const Text('Batal'),
+                          onPressed: () {
+                            Navigator.of(context).pop(false);
+                          },
+                        ),
+                        TextButton(
+                          child: const Text('Ya, Refresh'),
+                          onPressed: () {
+                            Navigator.of(context).pop(true);
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                  if (shouldReload ?? false) {
+                    _controller?.reload();
+                  }
+                },
               ),
             IconButton(
               icon: const Icon(Icons.home),

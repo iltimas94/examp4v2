@@ -5,6 +5,7 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
 }
 
 // Baca properti dari key.properties
@@ -41,7 +42,7 @@ android {
 
     defaultConfig {
         applicationId = "smpn4.malang.examp4"
-        minSdk = flutter.minSdkVersion
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -60,5 +61,5 @@ flutter {
 }
 
 dependencies {
-    // Daftar dependensi Anda
+    implementation(platform("com.google.firebase:firebase-bom:34.6.0"))
 }

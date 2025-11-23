@@ -1,11 +1,14 @@
 package smpn4.malang.examp4
 
 import android.app.ActivityManager
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.WindowInsets
@@ -18,6 +21,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity: FlutterActivity() {
     private val SECURE_FLAG_CHANNEL = "com.example.exam_browser/secure_flag"
     private val ACTIVITY_MONITOR_CHANNEL = "com.example.exam_browser/activity_monitor"
+    private val DND_CHANNEL = "com.example.exam_browser/dnd"
 
     private lateinit var activityMonitorChannelInstance: MethodChannel
 
@@ -26,6 +30,7 @@ class MainActivity: FlutterActivity() {
     private var isAppInFocus = true
     private var initialSystemUiVisibility: Int = 0
     private var isCurrentlyLocked = false
+    private var previousDndState: Int = -1
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -55,16 +60,62 @@ class MainActivity: FlutterActivity() {
                     isCurrentlyLocked = false
                     initialSystemUiVisibility = window.decorView.systemUiVisibility
                     hideSystemUI()
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    setDndMode(true) // Aktifkan DND
                     result.success("Activity monitoring started")
-                    Log.d("ActivityMonitor", "Monitoring started")
+                    Log.d("ActivityMonitor", "Monitoring started, DND activated")
                 }
                 "stopMonitoring" -> {
                     isMonitoringActivity = false
                     showSystemUI(initialSystemUiVisibility)
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    setDndMode(false) // Nonaktifkan DND
                     result.success("Activity monitoring stopped")
-                    Log.d("ActivityMonitor", "Monitoring stopped")
+                    Log.d("ActivityMonitor", "Monitoring stopped, DND deactivated")
                 }
                 else -> result.notImplemented()
+            }
+        }
+
+        // Channel baru untuk mengelola izin DND dari Flutter
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DND_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "requestDndPermission" -> {
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !notificationManager.isNotificationPolicyAccessGranted) {
+                        val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                        startActivity(intent)
+                    }
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun setDndMode(enable: Boolean) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!notificationManager.isNotificationPolicyAccessGranted) {
+                Log.w("DND", "Izin 'Jangan Ganggu' belum diberikan.")
+                // Opsional: Buka pengaturan jika izin belum ada saat ujian dimulai
+                // val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                // startActivity(intent)
+                return
+            }
+
+            if (enable) {
+                // Simpan state DND saat ini sebelum mengubahnya
+                previousDndState = notificationManager.currentInterruptionFilter
+                // Aktifkan mode Jangan Ganggu total (semua diblok)
+                notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
+                Log.d("DND", "Mode 'Jangan Ganggu' diaktifkan.")
+            } else {
+                // Kembalikan state DND ke state sebelumnya
+                if (previousDndState != -1) {
+                    notificationManager.setInterruptionFilter(previousDndState)
+                    Log.d("DND", "Mode 'Jangan Ganggu' dikembalikan ke normal.")
+                }
             }
         }
     }
@@ -98,34 +149,17 @@ class MainActivity: FlutterActivity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
     }
 
-    private fun getRunningAppsReason(): String {
-        try {
-            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val runningApps = activityManager.runningAppProcesses ?: return "Aktivitas mencurigakan terdeteksi."
-            val myPackageName = packageName
-            val otherForegroundApps = runningApps
-                .filter { it.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND && it.processName != myPackageName }
-                .mapNotNull { it.processName }
-                .distinct()
-                .joinToString(", ")
-
-            return if (otherForegroundApps.isNotEmpty()) {
-                "Aplikasi berjalan: $otherForegroundApps"
-            } else {
-                "Terdeteksi kehilangan fokus jendela."
-            }
-        } catch (e: Exception) {
-            Log.e("ActivityMonitor", "Error getting running apps", e)
-            return "Gagal mendeteksi aplikasi lain."
+    private fun lockApp(reason: String) {
+        if (!isCurrentlyLocked) {
+            Log.w("ActivityMonitor", "Locking app. Reason: $reason")
+            activityMonitorChannelInstance.invokeMethod("lockApp", reason)
+            isCurrentlyLocked = true
         }
     }
 
-    private fun lockAppIfNeeded() {
-        if (isMonitoringActivity && !isAppInFocus && !isCurrentlyLocked) {
-            val reason = getRunningAppsReason()
-            Log.w("ActivityMonitor", "Requesting app lock. Reason: $reason")
-            activityMonitorChannelInstance.invokeMethod("lockApp", reason)
-            isCurrentlyLocked = true
+    private fun checkMultiWindowAndLock() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInMultiWindowMode) {
+            lockApp("Mode Layar Terpisah (Split Screen) tidak diizinkan.")
         }
     }
 
@@ -135,11 +169,15 @@ class MainActivity: FlutterActivity() {
 
         if (isMonitoringActivity) {
             isAppInFocus = hasFocus
-            if (!hasFocus) {
-                handler.postDelayed({ lockAppIfNeeded() }, 250)
+            if (!hasFocus && !isInMultiWindowMode) { // Hanya kunci jika bukan karena multi-window
+                handler.postDelayed({
+                    if (!isAppInFocus) {
+                        lockApp("Terdeteksi kehilangan fokus jendela.")
+                    }
+                }, 250)
             } else {
                 hideSystemUI()
-                if (isCurrentlyLocked) {
+                if (isCurrentlyLocked && !isInMultiWindowMode) {
                     isCurrentlyLocked = false
                 }
             }
@@ -152,7 +190,8 @@ class MainActivity: FlutterActivity() {
 
         if (isMonitoringActivity && !isFinishing) {
             isAppInFocus = false
-            handler.postDelayed({ lockAppIfNeeded() }, 300)
+            // Pengecekan utama untuk multi-window saat jeda
+            handler.postDelayed({ checkMultiWindowAndLock() }, 100)
         }
     }
 
@@ -161,7 +200,11 @@ class MainActivity: FlutterActivity() {
         if (isMonitoringActivity) {
             isAppInFocus = true
             hideSystemUI()
-            if (isCurrentlyLocked) {
+
+            // Pengecekan multi-window saat aplikasi kembali aktif
+            checkMultiWindowAndLock()
+
+            if (isCurrentlyLocked && !isInMultiWindowMode) {
                 isCurrentlyLocked = false
             }
         }

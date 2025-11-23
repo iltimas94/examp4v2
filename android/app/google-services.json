@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "284097031804",
+    "project_id": "ex-browser-4",
+    "storage_bucket": "ex-browser-4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:284097031804:android:702707f015f1416d18a3f9",
+        "android_client_info": {
+          "package_name": "smpn4.malang.examp4"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC2nVsUrI0nSqjXqxT55D6GhzGC-0wqj0I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
