@@ -133,6 +133,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
   String _fetchError = "";
   String _examNote = "";
   bool _isDndPermissionGranted = false;
+  bool _dndCheckBypassed = false;
 
   @override
   void initState() {
@@ -261,7 +262,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    if (!_isDndPermissionGranted && Platform.isAndroid) {
+    if (!_isDndPermissionGranted && Platform.isAndroid && !_dndCheckBypassed) {
       return Scaffold(
         body: Padding(
           padding: const EdgeInsets.all(30.0),
@@ -283,6 +284,14 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                 onPressed: _requestDndPermission,
                 icon: const Icon(Icons.settings),
                 label: const Text('Buka Pengaturan'),
+              ),
+              const SizedBox(height: 10),
+              TextButton(
+                onPressed: () {
+                  setState(() => _dndCheckBypassed = true);
+                  _refreshData();
+                },
+                child: const Text('Lanjutkan Nanti'),
               ),
             ],
           ),
@@ -527,34 +536,36 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   void initState() {
     super.initState();
 
-    late final PlatformWebViewControllerCreationParams params;
-    if (WebViewPlatform.instance is AndroidWebViewPlatform) {
-      params = AndroidWebViewControllerCreationParams();
-    } else {
-      params = const PlatformWebViewControllerCreationParams();
-    }
+    if (_isWebViewSupported) {
+      late final PlatformWebViewControllerCreationParams params;
+      if (WebViewPlatform.instance is AndroidWebViewPlatform) {
+        params = AndroidWebViewControllerCreationParams();
+      } else {
+        params = const PlatformWebViewControllerCreationParams();
+      }
 
-    final WebViewController controller = WebViewController.fromPlatformCreationParams(params);
-    
-    _controller = controller
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (String url) {},
-          onNavigationRequest: (NavigationRequest request) {
-            if (_lockReason != null) return NavigationDecision.prevent;
-            if (request.url.startsWith(widget.examUrl) || request.url.contains(".google.com")) {
-              return NavigationDecision.navigate;
-            }
-            return NavigationDecision.prevent;
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(widget.examUrl));
+      final WebViewController controller = WebViewController.fromPlatformCreationParams(params);
+      
+      _controller = controller
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setBackgroundColor(const Color(0x00000000))
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onPageStarted: (String url) {},
+            onNavigationRequest: (NavigationRequest request) {
+              if (_lockReason != null) return NavigationDecision.prevent;
+              if (request.url.startsWith(widget.examUrl) || request.url.contains(".google.com")) {
+                return NavigationDecision.navigate;
+              }
+              return NavigationDecision.prevent;
+            },
+          ),
+        )
+        ..loadRequest(Uri.parse(widget.examUrl));
 
-    if (controller.platform is AndroidWebViewController) {
+      if (controller.platform is AndroidWebViewController) {
         (controller.platform as AndroidWebViewController).setMediaPlaybackRequiresUserGesture(false);
+      }
     }
 
     _fetchAdminCode();
