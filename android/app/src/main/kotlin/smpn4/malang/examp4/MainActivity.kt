@@ -22,6 +22,7 @@ class MainActivity: FlutterActivity() {
     private val SECURE_FLAG_CHANNEL = "com.example.exam_browser/secure_flag"
     private val ACTIVITY_MONITOR_CHANNEL = "com.example.exam_browser/activity_monitor"
     private val DND_CHANNEL = "com.example.exam_browser/dnd"
+    private val BRIGHTNESS_CHANNEL = "com.example.exam_browser/brightness"
 
     private lateinit var activityMonitorChannelInstance: MethodChannel
 
@@ -67,6 +68,7 @@ class MainActivity: FlutterActivity() {
                     showSystemUI(initialSystemUiVisibility)
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     setDndMode(false)
+                    setBrightness(-1.0f)
                     result.success("Activity monitoring stopped")
                 }
                 else -> result.notImplemented()
@@ -88,37 +90,49 @@ class MainActivity: FlutterActivity() {
                     val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         notificationManager.isNotificationPolicyAccessGranted
                     } else {
-                        true // Dianggap sudah ada di versi Android lama
+                        true
                     }
                     result.success(granted)
                 }
                 else -> result.notImplemented()
             }
         }
+        
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BRIGHTNESS_CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method == "setBrightness") {
+                val brightness = call.argument<Double>("brightness")?.toFloat() ?: -1.0f
+                setBrightness(brightness)
+                result.success(null)
+            } else {
+                result.notImplemented()
+            }
+        }
+    }
+
+    private fun setBrightness(brightness: Float) {
+        val layoutParams: WindowManager.LayoutParams = window.attributes
+        layoutParams.screenBrightness = brightness
+        window.attributes = layoutParams
     }
 
     private fun setDndMode(enable: Boolean) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!notificationManager.isNotificationPolicyAccessGranted) {
-                Log.w("DND", "Izin 'Jangan Ganggu' belum diberikan.")
                 return
             }
 
             if (enable) {
                 previousDndState = notificationManager.currentInterruptionFilter
                 notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
-                Log.d("DND", "Mode 'Jangan Ganggu' diaktifkan.")
             } else {
                 if (previousDndState != -1) {
                     notificationManager.setInterruptionFilter(previousDndState)
-                    Log.d("DND", "Mode 'Jangan Ganggu' dikembalikan ke normal.")
                 }
             }
         }
     }
     
-    // Sisa file tetap sama
     private fun hideSystemUI() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.insetsController?.let {
@@ -150,7 +164,6 @@ class MainActivity: FlutterActivity() {
 
     private fun lockApp(reason: String) {
         if (!isCurrentlyLocked) {
-            Log.w("ActivityMonitor", "Locking app. Reason: $reason")
             activityMonitorChannelInstance.invokeMethod("lockApp", reason)
             isCurrentlyLocked = true
         }
@@ -168,7 +181,7 @@ class MainActivity: FlutterActivity() {
 
         if (isMonitoringActivity) {
             isAppInFocus = hasFocus
-            if (!hasFocus && !isInMultiWindowMode) {
+            if (!hasFocus) {
                 handler.postDelayed({
                     if (!isAppInFocus) {
                         lockApp("Terdeteksi kehilangan fokus jendela.")
@@ -176,9 +189,6 @@ class MainActivity: FlutterActivity() {
                 }, 250)
             } else {
                 hideSystemUI()
-                if (isCurrentlyLocked && !isInMultiWindowMode) {
-                    isCurrentlyLocked = false
-                }
             }
         }
     }
@@ -188,7 +198,6 @@ class MainActivity: FlutterActivity() {
         if (!::activityMonitorChannelInstance.isInitialized) return
 
         if (isMonitoringActivity && !isFinishing) {
-            isAppInFocus = false
             handler.postDelayed({ checkMultiWindowAndLock() }, 100)
         }
     }
@@ -196,12 +205,9 @@ class MainActivity: FlutterActivity() {
     override fun onResume() {
         super.onResume()
         if (isMonitoringActivity) {
-            isAppInFocus = true
+            isCurrentlyLocked = false 
             hideSystemUI()
             checkMultiWindowAndLock()
-            if (isCurrentlyLocked && !isInMultiWindowMode) {
-                isCurrentlyLocked = false
-            }
         }
     }
 }
