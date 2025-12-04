@@ -176,33 +176,60 @@ class _StartupScreenState extends State<StartupScreen> {
     }
   }
 
+  // --- FUNGSI DENGAN LOGIKA SESI YANG DISEMPURNAKAN ---
   Future<void> _checkLockStatusAndNavigate() async {
     final prefs = await SharedPreferences.getInstance();
     final bool isLocked = prefs.getBool('isAppLocked') ?? false;
-    final int? lockTimestamp = prefs.getInt('lockTimestamp');
 
-    bool isLockStale = false;
-    if (lockTimestamp != null) {
-      final lockTime = DateTime.fromMillisecondsSinceEpoch(lockTimestamp);
-      if (DateTime.now().difference(lockTime).inHours >= 1) {
-        isLockStale = true;
-      }
-    }
-
-    if (isLocked && !isLockStale) {
-      final String? lockReason = prefs.getString('lastLockReason');
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => TokenScreen(initialLockReason: lockReason)),
-        );
-      }
-    } else {
-      await _clearLockData(prefs);
+    // Jika tidak ada data kunci sama sekali, langsung ke halaman token
+    if (!isLocked) {
+      await _clearLockData(prefs); // Pastikan bersih
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const TokenScreen()),
         );
       }
+      return;
+    }
+
+    // Jika terkunci, kita perlu validasi sesi
+    try {
+      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String gid = '1494571347';
+      const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
+      final response = await http.get(Uri.parse(csvUrl));
+
+      if (response.statusCode == 200) {
+        final String currentSessionId = response.body.trim();
+        final String? savedSessionId = prefs.getString('lockSessionId');
+        debugPrint("Validasi Sesi: Sesi Tersimpan='$savedSessionId', Sesi Saat Ini='$currentSessionId'");
+
+        // Jika ID sesi berbeda (dan sesi tersimpan tidak null & tidak kosong), berarti sesi sudah berakhir.
+        if (savedSessionId != null && savedSessionId.isNotEmpty && savedSessionId != currentSessionId) {
+          debugPrint("Sesi Ujian telah berubah. Membuka kunci secara otomatis.");
+          await _clearLockData(prefs);
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const TokenScreen()),
+            );
+          }
+          return; // Hentikan eksekusi lebih lanjut
+        }
+      }
+    } catch (e) {
+      debugPrint("Gagal memvalidasi sesi ujian: $e. Kunci akan tetap ditampilkan sebagai fallback.");
+      // Jika gagal mengambil sesi terbaru, kita biarkan kunci tetap muncul
+      // untuk keamanan, jangan otomatis dibuka.
+    }
+    // --- AKHIR LOGIKA VALIDASI SESI ---
+
+
+    // Jika semua pemeriksaan lolos (sesi sama atau validasi gagal), tampilkan layar kunci.
+    final String? lockReason = prefs.getString('lastLockReason');
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => TokenScreen(initialLockReason: lockReason)),
+      );
     }
   }
 
@@ -211,6 +238,7 @@ class _StartupScreenState extends State<StartupScreen> {
     await prefs.remove('lastExamUrl');
     await prefs.remove('lastLockReason');
     await prefs.remove('lockTimestamp');
+    await prefs.remove('lockSessionId'); // Pastikan ini juga dihapus
   }
 
   @override
@@ -270,7 +298,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && _lockReason == null) {
       _checkDndPermission();
     }
   }
@@ -313,7 +341,10 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   Future<void> _refreshData() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _fetchError = ""; // Reset pesan error setiap kali refresh dimulai
+    });
     await _fetchExamToken();
     await _fetchExamNote();
     if (mounted) {
@@ -335,7 +366,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
         setState(() => _examNote = note.replaceAll('""', '"'));
       }
     } catch (e) {
-      // handle
+      debugPrint("Failed to fetch exam note: $e");
     }
   }
 
@@ -353,6 +384,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (mounted) setState(() => _fetchError = "Error mengambil token. Periksa koneksi internet Anda.");
+      debugPrint("Failed to fetch exam token: $e");
     }
   }
 
@@ -375,6 +407,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     await prefs.remove('lastExamUrl');
     await prefs.remove('lastLockReason');
     await prefs.remove('lockTimestamp');
+    await prefs.remove('lockSessionId');
   }
 
   Future<void> _fetchAdminCode() async {
@@ -389,20 +422,29 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
         setState(() => _correctAdminCode = response.body.trim());
       }
     } catch (e) {
-      // handle error
+      debugPrint("Failed to fetch admin code: $e");
     } finally {
       if (mounted) setState(() => _isFetchingAdminCode = false);
     }
   }
 
   void _attemptUnlock() async {
-    if (_correctAdminCode == null) return;
+    if (_correctAdminCode == null) {
+      await _fetchAdminCode();
+      if (_correctAdminCode == null) {
+        setState(() => _adminCodeError = "Gagal verifikasi. Coba lagi.");
+        return;
+      }
+    }
+
     if (_adminCodeController.text == _correctAdminCode) {
       await _clearLockData();
       setState(() {
         _lockReason = null;
         _adminCodeError = "";
         _adminCodeController.clear();
+        _isLoading = true; // Kembali ke loading untuk memulai flow normal
+        _checkPermissionsAndLoad();
       });
     } else {
       setState(() => _adminCodeError = "Kode admin salah.");
@@ -421,7 +463,19 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final bool showFab = !_isLoading &&
+        _lockReason == null &&
+        (_isDndPermissionGranted || _dndCheckBypassed) &&
+        _fetchError.isEmpty;
+
     return Scaffold(
+      floatingActionButton: showFab
+          ? FloatingActionButton(
+        onPressed: _refreshData,
+        child: const Icon(Icons.refresh),
+        tooltip: 'Refresh Data Ujian',
+      )
+          : null,
       body: Stack(
         children: [
           _buildMainContent(),
@@ -447,9 +501,9 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                 const Text('Aplikasi Terkunci!', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 15),
                 const Text(
-                  'Aplikasi sebelumnya ditutup paksa saat sesi ujian sedang berjalan. Silakan hubungi pengawas atau masukkan kode admin untuk membuka.',
-                  textAlign: TextAlign.center, 
-                  style: TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)
+                    'Aplikasi sebelumnya ditutup paksa saat sesi ujian sedang berjalan. Silakan hubungi pengawas atau masukkan kode admin untuk membuka.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)
                 ),
                 const SizedBox(height: 30),
                 Padding(
@@ -476,8 +530,8 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                   children: [
                     ElevatedButton(
                       onPressed: _isFetchingAdminCode ? null : _attemptUnlock,
-                      child: _isFetchingAdminCode 
-                          ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)) 
+                      child: _isFetchingAdminCode
+                          ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
                           : const Text("Buka Kunci"),
                     ),
                     const SizedBox(width: 10),
@@ -496,7 +550,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildMainContent() {
-    if (!_isDndPermissionGranted && Platform.isAndroid && !_dndCheckBypassed) {
+    if (_lockReason == null && !_isDndPermissionGranted && Platform.isAndroid && !_dndCheckBypassed) {
       return Padding(
         padding: const EdgeInsets.all(30.0),
         child: Column(
@@ -536,7 +590,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     }
 
     if (_fetchError.isNotEmpty && _correctExamToken == null) {
-       return Center(
+      return Center(
         child: Padding(
           padding: const EdgeInsets.all(30.0),
           child: Column(
@@ -598,10 +652,10 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 20),
             if (_examNote.isNotEmpty)
-               Padding(
-                 padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                 child: Text(_examNote, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.black54)),
-               ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                child: Text(_examNote, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.black54)),
+              ),
             const SizedBox(height: 40),
             Text(_appVersion, style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
@@ -610,7 +664,6 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     );
   }
 }
-
 
 class ExamListScreen extends StatefulWidget {
   const ExamListScreen({super.key});
@@ -652,10 +705,10 @@ class _ExamListScreenState extends State<ExamListScreen> {
             }
           }
           setState(() => _exams = exams);
-        } 
+        }
       }
     } catch (e) {
-      // handle error
+      debugPrint("Failed to fetch exams: $e");
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -678,52 +731,52 @@ class _ExamListScreenState extends State<ExamListScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : GridView.builder(
-              padding: const EdgeInsets.all(8),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 8,
-                mainAxisSpacing: 8,
-                childAspectRatio: 0.8,
-              ),
-              itemCount: _exams.length,
-              itemBuilder: (context, index) {
-                final exam = _exams[index];
-                return Card(
-                  clipBehavior: Clip.antiAlias,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                  child: InkWell(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (context) => ExamContentScreen(examUrl: exam.link)),
-                      );
-                    },
+        padding: const EdgeInsets.all(8),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
+          childAspectRatio: 0.8,
+        ),
+        itemCount: _exams.length,
+        itemBuilder: (context, index) {
+          final exam = _exams[index];
+          return Card(
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            child: InkWell(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (context) => ExamContentScreen(examUrl: exam.link)),
+                );
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Image.network(
+                      exam.image,
+                      fit: BoxFit.cover,
+                      errorBuilder: (c, o, s) => const Icon(Icons.error, size: 40),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Image.network(
-                            exam.image,
-                            fit: BoxFit.cover,
-                            errorBuilder: (c, o, s) => const Icon(Icons.error, size: 40),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(exam.mapel, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                              const SizedBox(height: 4),
-                              Text(exam.waktu, style: const TextStyle(fontSize: 12)),
-                            ],
-                          ),
-                        ),
+                        Text(exam.mapel, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 4),
+                        Text(exam.waktu, style: const TextStyle(fontSize: 12)),
                       ],
                     ),
                   ),
-                );
-              },
+                ],
+              ),
             ),
+          );
+        },
+      ),
     );
   }
 }
@@ -733,7 +786,7 @@ class ExamContentScreen extends StatefulWidget {
   final String? initialLockReason;
 
   const ExamContentScreen({
-    super.key, 
+    super.key,
     required this.examUrl,
     this.initialLockReason,
   });
@@ -755,12 +808,16 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   String _adminCodeError = "";
   bool _isFetchingAdminCode = false;
 
+  bool _isLockSystemEnabledOnThisSession = false;
+
   bool get _isWebViewSupported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   @override
   void initState() {
     super.initState();
     _lockReason = widget.initialLockReason;
+
+    _initializeSessionSettings();
 
     if (_isWebViewSupported) {
       late final PlatformWebViewControllerCreationParams params;
@@ -771,7 +828,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
       }
 
       final WebViewController controller = WebViewController.fromPlatformCreationParams(params);
-      
+
       _controller = controller
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0x00000000))
@@ -794,25 +851,79 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
       }
     }
 
-    _fetchAdminCode();
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) => _updateTime());
 
     _lockReasonSubscription = ActivityMonitorService.lockReasonStream.listen((reason) async {
+      if (reason == null) return;
+
+      if (!_isLockSystemEnabledOnThisSession) {
+        debugPrint("Sistem kunci OFF pada sesi ini. Penguncian layar dibatalkan.");
+        return;
+      }
+
       final prefs = await SharedPreferences.getInstance();
       if (mounted) {
+        if (_correctAdminCode == null) await _fetchAdminCode();
+
         setState(() {
           _lockReason = reason;
         });
+
         if (reason != null) {
           await prefs.setBool('isAppLocked', true);
           await prefs.setString('lastExamUrl', widget.examUrl);
           await prefs.setString('lastLockReason', reason);
           await prefs.setInt('lockTimestamp', DateTime.now().millisecondsSinceEpoch);
-          _fetchAdminCode(); 
-        } 
+        }
       }
     });
+  }
+
+  Future<void> _initializeSessionSettings() async {
+    _isLockSystemEnabledOnThisSession = await _fetchLockSystemStatus();
+    await _fetchAdminCode();
+    // --- PERUBAHAN BARU: SIMPAN ID SESI SAAT MASUK HALAMAN UJIAN ---
+    _saveCurrentSessionId();
+  }
+
+  // --- FUNGSI BARU UNTUK MENYIMPAN ID SESI ---
+  Future<void> _saveCurrentSessionId() async {
+    try {
+      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String gid = '1494571347';
+      const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
+      final response = await http.get(Uri.parse(csvUrl));
+      if (response.statusCode == 200) {
+        final currentSessionId = response.body.trim();
+        if (currentSessionId.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('lockSessionId', currentSessionId);
+          debugPrint("Sesi Ujian '$currentSessionId' disimpan saat memasuki halaman ujian.");
+        }
+      }
+    } catch (e) {
+      debugPrint("Gagal menyimpan ID Sesi saat memasuki halaman ujian: $e");
+    }
+  }
+
+  Future<bool> _fetchLockSystemStatus() async {
+    try {
+      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String gid = '522874477';
+      const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
+      final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final status = response.body.trim().toUpperCase();
+        debugPrint("Status Sistem Kunci untuk sesi ini: $status");
+        return status == 'ON';
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Gagal mengambil status sistem kunci, menganggap OFF. Error: $e");
+      return false;
+    }
   }
 
   Future<void> _setBrightness(double brightness) async {
@@ -851,14 +962,13 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
         });
       }
     } catch (e) {
-      // Handled
+      debugPrint("Failed to fetch admin code: $e");
     } finally {
       if(mounted) {
         setState(() => _isFetchingAdminCode = false);
       }
     }
   }
-
 
   Future<void> _initializeExamMode() async {
     if (!_isWebViewSupported) return;
@@ -873,8 +983,9 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     await prefs.remove('lastExamUrl');
     await prefs.remove('lastLockReason');
     await prefs.remove('lockTimestamp');
+    await prefs.remove('lockSessionId');
   }
-  
+
   Future<void> _exitExamMode() async {
     if (!_isWebViewSupported) return;
     await _setBrightness(-1.0);
@@ -884,23 +995,115 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   }
 
   void _attemptUnlock() async {
-    if (_correctAdminCode == null) return;
+    if (_correctAdminCode == null) {
+      await _fetchAdminCode();
+      if (_correctAdminCode == null) {
+        setState(() => _adminCodeError = "Gagal verifikasi. Coba lagi.");
+        return;
+      }
+    }
+
     if (_adminCodeController.text == _correctAdminCode) {
       await _clearLockData();
       ActivityMonitorService.requestUnlock();
+
+      if (mounted) {
+        setState(() {
+          _lockReason = null;
+          _adminCodeError = "";
+          _adminCodeController.clear();
+        });
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      await ActivityMonitorService.initializeMonitoring();
+      debugPrint("Activity Monitoring diinisialisasi ulang setelah unlock.");
+
     } else {
-      setState(() => _adminCodeError = "Kode admin salah.");
-      _adminCodeController.clear();
-      HapticFeedback.mediumImpact();
+      if (mounted) {
+        setState(() {
+          _adminCodeError = "Kode admin salah.";
+          _adminCodeController.clear();
+        });
+        HapticFeedback.mediumImpact();
+      }
     }
   }
+  Future<bool> _showAdminAuthDialog({required String title, required String content}) async {
+    if (!_isLockSystemEnabledOnThisSession) {
+      debugPrint("Sistem kunci OFF pada sesi ini. Otorisasi admin dilewati.");
+      return true;
+    }
 
+    if (_correctAdminCode == null) await _fetchAdminCode();
+
+    final TextEditingController dialogAdminCodeController = TextEditingController();
+    String? dialogError;
+
+    final bool? result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(title),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(content),
+                    const SizedBox(height: 20),
+                    TextField(
+                      controller: dialogAdminCodeController,
+                      obscureText: true,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: 'Kode Admin',
+                        errorText: dialogError,
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Batal'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (dialogAdminCodeController.text == _correctAdminCode) {
+                      Navigator.of(context).pop(true);
+                    } else {
+                      setDialogState(() {
+                        dialogError = 'Kode admin salah.';
+                      });
+                      dialogAdminCodeController.clear();
+                      HapticFeedback.mediumImpact();
+                    }
+                  },
+                  child: const Text('Konfirmasi'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    await Future.delayed(const Duration(milliseconds: 100));
+    dialogAdminCodeController.dispose();
+
+    return result ?? false;
+  }
   @override
   void dispose() {
     _timer.cancel();
     _lockReasonSubscription?.cancel();
     _adminCodeController.dispose();
-    _exitExamMode(); 
+    _exitExamMode();
     super.dispose();
   }
 
@@ -910,22 +1113,29 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
 
     return WillPopScope(
       onWillPop: () async {
-        if (isActuallyLocked) return false; 
-        final bool? shouldPop = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Kembali ke Daftar Ujian?'),
-            content: const Text('Apakah Anda yakin ingin keluar dari ujian ini?'),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Batal')),
-              TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Yakin')),
-            ],
-          ),
+        if (isActuallyLocked) return false;
+
+        return _showAdminAuthDialog(
+          title: 'Kembali ke Daftar Ujian?',
+          content: 'Untuk keluar dari ujian ini, masukkan kode admin.',
         );
-        return shouldPop ?? false;
       },
       child: Scaffold(
         appBar: AppBar(
+          leading: isActuallyLocked
+              ? const SizedBox.shrink()
+              : IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              final bool canPop = await _showAdminAuthDialog(
+                title: 'Kembali ke Daftar Ujian?',
+                content: 'Untuk keluar dari ujian ini, masukkan kode admin.',
+              );
+              if (canPop && mounted) {
+                Navigator.of(context).pop();
+              }
+            },
+          ),
           title: const Text('Ujian'),
           actions: [
             Center(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Text(_currentTime, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)))),
@@ -952,22 +1162,17 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
             IconButton(
               icon: const Icon(Icons.home),
               onPressed: () async {
-                 if (isActuallyLocked) return; 
-                final bool? shouldPop = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Kembali ke Halaman Awal?'),
-                    content: const Text('Apakah Anda yakin ingin keluar dari sesi ujian dan kembali ke halaman token?'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Batal')),
-                      TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Yakin')),
-                    ],
-                  ),
+                if (isActuallyLocked) return;
+
+                final bool canNavigateHome = await _showAdminAuthDialog(
+                  title: 'Kembali ke Halaman Awal?',
+                  content: 'Untuk keluar dari sesi ujian dan kembali ke halaman token, masukkan kode admin.',
                 );
-                if (shouldPop ?? false) {
+
+                if (canNavigateHome && mounted) {
                   Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute(builder: (context) => const TokenScreen()),
-                    (route) => false,
+                        (route) => false,
                   );
                 }
               },
@@ -1021,8 +1226,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                             children: [
                               ElevatedButton(
                                 onPressed: _isFetchingAdminCode ? null : _attemptUnlock,
-                                child: _isFetchingAdminCode 
-                                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)) 
+                                child: _isFetchingAdminCode
+                                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
                                     : const Text("Buka Kunci"),
                               ),
                               const SizedBox(width: 10),
@@ -1032,12 +1237,12 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                               ),
                             ],
                           ),
-                           const SizedBox(height: 20),
-                           if (_lockReason != null)
-                             Padding(
-                               padding: const EdgeInsets.only(top: 15.0),
-                               child: Text(_lockReason!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)),
-                             ),
+                          const SizedBox(height: 20),
+                          if (_lockReason != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 15.0),
+                              child: Text(_lockReason!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)),
+                            ),
                         ],
                       ),
                     ),
