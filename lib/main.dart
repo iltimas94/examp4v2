@@ -686,7 +686,7 @@ class _ExamListScreenState extends State<ExamListScreen> {
     setState(() => _isLoading = true);
     try {
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
-      const String gid = '2003099256';
+      const String gid = '787301166';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
       if (mounted) {
