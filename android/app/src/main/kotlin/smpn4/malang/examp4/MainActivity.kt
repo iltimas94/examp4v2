@@ -33,6 +33,10 @@ class MainActivity: FlutterActivity() {
     private var isCurrentlyLocked = false
     private var previousDndState: Int = -1
 
+    // Flag untuk menunda pengaktifan keamanan (Delayed Start)
+    private var isSecurityActive = false
+    private val DELAY_SECURITY_MS: Long = 60000 // 1 Menit (60.000 ms)
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -57,14 +61,27 @@ class MainActivity: FlutterActivity() {
                     isMonitoringActivity = true
                     isAppInFocus = true
                     isCurrentlyLocked = false
+                    isSecurityActive = false // Reset keamanan saat mulai
+                    
                     initialSystemUiVisibility = window.decorView.systemUiVisibility
                     hideSystemUI()
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     setDndMode(true)
-                    result.success("Activity monitoring started")
+                    
+                    // AKTIVASI KEAMANAN SETELAH JEDA 1 MENIT
+                    handler.removeCallbacksAndMessages(null)
+                    handler.postDelayed({
+                        isSecurityActive = true
+                        Log.d("MainActivity", "Sistem Keamanan Aktif (Delayed Start Berakhir)")
+                    }, DELAY_SECURITY_MS)
+                    
+                    result.success("Activity monitoring started with 1 min delay")
                 }
                 "stopMonitoring" -> {
                     isMonitoringActivity = false
+                    isSecurityActive = false
+                    handler.removeCallbacksAndMessages(null)
+                    
                     showSystemUI(initialSystemUiVisibility)
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     setDndMode(false)
@@ -163,9 +180,14 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun lockApp(reason: String) {
-        if (!isCurrentlyLocked) {
-            activityMonitorChannelInstance.invokeMethod("lockApp", reason)
-            isCurrentlyLocked = true
+        // HANYA MENGUNCI JIKA SISTEM KEAMANAN SUDAH AKTIF (Delayed Start Selesai)
+        if (isSecurityActive && !isCurrentlyLocked) {
+            if (::activityMonitorChannelInstance.isInitialized) {
+                activityMonitorChannelInstance.invokeMethod("lockApp", reason)
+                isCurrentlyLocked = true
+            }
+        } else if (!isSecurityActive) {
+            Log.d("MainActivity", "Penguncian dibatalkan: Masih dalam masa jeda 1 menit. Alasan: $reason")
         }
     }
 
@@ -205,7 +227,7 @@ class MainActivity: FlutterActivity() {
     override fun onResume() {
         super.onResume()
         if (isMonitoringActivity) {
-            isCurrentlyLocked = false 
+            // isCurrentlyLocked = false  // Baris ini sengaja tetap dihapus/dikomen agar tidak membuka kunci otomatis
             hideSystemUI()
             checkMultiWindowAndLock()
         }

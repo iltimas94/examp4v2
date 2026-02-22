@@ -131,6 +131,7 @@ class _StartupScreenState extends State<StartupScreen> {
   Future<void> _checkVersionAndNavigate() async {
     final PackageInfo info = await PackageInfo.fromPlatform();
     final int localVersion = int.parse(info.buildNumber);
+    debugPrint("DEBUG_VERSION: Versi Lokal = $localVersion");
 
     try {
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
@@ -140,7 +141,10 @@ class _StartupScreenState extends State<StartupScreen> {
 
       if (response.statusCode == 200) {
         final int latestVersion = int.parse(response.body.trim());
+        debugPrint("DEBUG_VERSION: Versi Server = $latestVersion");
+        
         if (localVersion < latestVersion) {
+          debugPrint("DEBUG_VERSION: Update diperlukan (Lokal < Server)");
           if (mounted) {
             await showDialog<void>(
               context: context,
@@ -148,7 +152,7 @@ class _StartupScreenState extends State<StartupScreen> {
               builder: (BuildContext context) {
                 return AlertDialog(
                   title: const Text('Update Tersedia'),
-                  content: Text('Versi baru aplikasi tersedia. Mohon perbarui aplikasi untuk melanjutkan.'),
+                  content: Text('Versi baru aplikasi tersedia (V$latestVersion). Mohon perbarui aplikasi untuk melanjutkan.'),
                   actions: <Widget>[
                     TextButton(
                       child: const Text('PERBARUI SEKARANG'),
@@ -160,10 +164,12 @@ class _StartupScreenState extends State<StartupScreen> {
             );
           }
           return;
+        } else {
+          debugPrint("DEBUG_VERSION: Versi sudah sesuai atau lebih baru.");
         }
       }
     } catch (e) {
-      // Lanjutkan jika gagal
+      debugPrint("DEBUG_VERSION: Gagal cek versi: $e");
     }
 
     _checkLockStatusAndNavigate();
@@ -192,6 +198,9 @@ class _StartupScreenState extends State<StartupScreen> {
       return;
     }
 
+    String? currentSessionId;
+    String? savedSessionId = prefs.getString('lockSessionId');
+
     // Jika terkunci, kita perlu validasi sesi
     try {
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
@@ -200,8 +209,7 @@ class _StartupScreenState extends State<StartupScreen> {
       final response = await http.get(Uri.parse(csvUrl));
 
       if (response.statusCode == 200) {
-        final String currentSessionId = response.body.trim();
-        final String? savedSessionId = prefs.getString('lockSessionId');
+        currentSessionId = response.body.trim();
         debugPrint("Validasi Sesi: Sesi Tersimpan='$savedSessionId', Sesi Saat Ini='$currentSessionId'");
 
         // Jika ID sesi berbeda (dan sesi tersimpan tidak null & tidak kosong), berarti sesi sudah berakhir.
@@ -218,8 +226,6 @@ class _StartupScreenState extends State<StartupScreen> {
       }
     } catch (e) {
       debugPrint("Gagal memvalidasi sesi ujian: $e. Kunci akan tetap ditampilkan sebagai fallback.");
-      // Jika gagal mengambil sesi terbaru, kita biarkan kunci tetap muncul
-      // untuk keamanan, jangan otomatis dibuka.
     }
     // --- AKHIR LOGIKA VALIDASI SESI ---
 
@@ -228,7 +234,13 @@ class _StartupScreenState extends State<StartupScreen> {
     final String? lockReason = prefs.getString('lastLockReason');
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => TokenScreen(initialLockReason: lockReason)),
+        MaterialPageRoute(
+          builder: (context) => TokenScreen(
+            initialLockReason: lockReason,
+            savedSession: savedSessionId,
+            currentSession: currentSessionId,
+          ),
+        ),
       );
     }
   }
@@ -250,7 +262,15 @@ class _StartupScreenState extends State<StartupScreen> {
 // --- HALAMAN TOKEN ---
 class TokenScreen extends StatefulWidget {
   final String? initialLockReason;
-  const TokenScreen({super.key, this.initialLockReason});
+  final String? savedSession;
+  final String? currentSession;
+
+  const TokenScreen({
+    super.key,
+    this.initialLockReason,
+    this.savedSession,
+    this.currentSession,
+  });
 
   @override
   State<TokenScreen> createState() => _TokenScreenState();
@@ -292,7 +312,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
   Future<void> _initPackageInfo() async {
     final info = await PackageInfo.fromPlatform();
     if (mounted) {
-      setState(() => _appVersion = 'Versi ${info.version} (${info.buildNumber})');
+      setState(() => _appVersion = 'Versi ${info.version} (Build ${info.buildNumber})');
     }
   }
 
@@ -376,10 +396,17 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
       const String gid = '0';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 15));
-      if (mounted && response.statusCode == 200) {
-        String fetchedToken = response.body.trim();
-        if (fetchedToken.isNotEmpty) {
-          _correctExamToken = fetchedToken.split(',')[0].trim();
+      if (mounted) {
+        if (response.statusCode == 200) {
+          String fetchedToken = response.body.trim();
+          if (fetchedToken.isNotEmpty) {
+            _correctExamToken = fetchedToken.split(',')[0].trim();
+            setState(() => _fetchError = ""); // Reset error jika sukses
+          } else {
+            setState(() => _fetchError = "Data token kosong di server.");
+          }
+        } else {
+          setState(() => _fetchError = "Gagal menghubungi server (Status: ${response.statusCode}).");
         }
       }
     } catch (e) {
@@ -389,6 +416,12 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
   }
 
   void _validateToken() {
+    if (_correctExamToken == null) {
+      _refreshData();
+      setState(() => _tokenError = "Token belum terambil. Mencoba memuat ulang...");
+      return;
+    }
+
     if (_tokenController.text == _correctExamToken) {
       setState(() => _tokenError = "");
       Navigator.of(context).pushReplacement(
@@ -463,10 +496,11 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // FAB tetap muncul jika terjadi error fetch atau token belum ada, agar user bisa refresh
     final bool showFab = !_isLoading &&
         _lockReason == null &&
         (_isDndPermissionGranted || _dndCheckBypassed) &&
-        _fetchError.isEmpty;
+        (_fetchError.isEmpty || _correctExamToken == null);
 
     return Scaffold(
       floatingActionButton: showFab
@@ -541,6 +575,27 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
+                if (widget.savedSession != null || widget.currentSession != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 25.0),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Column(
+                        children: [
+                          const Text('--- INFORMASI SESI ---', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Text('Sesi Tersimpan: ${widget.savedSession ?? "None"}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                          const SizedBox(height: 4),
+                          Text('Sesi Server: ${widget.currentSession ?? "Gagal Memuat"}', style: const TextStyle(color: Colors.blueAccent, fontSize: 13, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -644,7 +699,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 20),
                     ElevatedButton(
                       onPressed: _validateToken,
-                      child: const Text('Masuk'),
+                      child: Text(_correctExamToken == null ? 'Ambil Token' : 'Masuk'),
                     ),
                   ],
                 ),
