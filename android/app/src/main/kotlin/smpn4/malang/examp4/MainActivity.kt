@@ -35,7 +35,7 @@ class MainActivity: FlutterActivity() {
 
     // Flag untuk menunda pengaktifan keamanan (Delayed Start)
     private var isSecurityActive = false
-    private val DELAY_SECURITY_MS: Long = 60000 // 1 Menit (60.000 ms)
+    private val DELAY_SECURITY_MS: Long = 60000 // Jeda 1 menit sesuai permintaan user
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -140,11 +140,16 @@ class MainActivity: FlutterActivity() {
             }
 
             if (enable) {
-                previousDndState = notificationManager.currentInterruptionFilter
+                if (previousDndState == -1) {
+                    previousDndState = notificationManager.currentInterruptionFilter
+                }
                 notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
             } else {
                 if (previousDndState != -1) {
                     notificationManager.setInterruptionFilter(previousDndState)
+                    previousDndState = -1
+                } else {
+                    notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
                 }
             }
         }
@@ -180,7 +185,6 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun lockApp(reason: String) {
-        // HANYA MENGUNCI JIKA SISTEM KEAMANAN SUDAH AKTIF (Delayed Start Selesai)
         if (isSecurityActive && !isCurrentlyLocked) {
             if (::activityMonitorChannelInstance.isInitialized) {
                 activityMonitorChannelInstance.invokeMethod("lockApp", reason)
@@ -227,9 +231,18 @@ class MainActivity: FlutterActivity() {
     override fun onResume() {
         super.onResume()
         if (isMonitoringActivity) {
-            // isCurrentlyLocked = false  // Baris ini sengaja tetap dihapus/dikomen agar tidak membuka kunci otomatis
             hideSystemUI()
             checkMultiWindowAndLock()
         }
+    }
+
+    override fun onDestroy() {
+        setDndMode(false)
+        super.onDestroy()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        setDndMode(false)
     }
 }

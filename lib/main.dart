@@ -212,9 +212,10 @@ class _StartupScreenState extends State<StartupScreen> {
         currentSessionId = response.body.trim();
         debugPrint("Validasi Sesi: Sesi Tersimpan='$savedSessionId', Sesi Saat Ini='$currentSessionId'");
 
-        // Jika ID sesi berbeda (dan sesi tersimpan tidak null & tidak kosong), berarti sesi sudah berakhir.
-        if (savedSessionId != null && savedSessionId.isNotEmpty && savedSessionId != currentSessionId) {
-          debugPrint("Sesi Ujian telah berubah. Membuka kunci secara otomatis.");
+        // Jika ID sesi berbeda, berarti sesi sudah berakhir atau data sesi lokal tidak valid/lama.
+        // Ini akan menangani kasus di mana savedSessionId adalah 'none' (null/kosong).
+        if (savedSessionId != currentSessionId) {
+          debugPrint("Sesi Ujian telah berubah atau tidak valid. Membuka kunci secara otomatis.");
           await _clearLockData(prefs);
           if (mounted) {
             Navigator.of(context).pushReplacement(
@@ -938,8 +939,17 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   Future<void> _initializeSessionSettings() async {
     _isLockSystemEnabledOnThisSession = await _fetchLockSystemStatus();
     await _fetchAdminCode();
-    // --- PERUBAHAN BARU: SIMPAN ID SESI SAAT MASUK HALAMAN UJIAN ---
-    _saveCurrentSessionId();
+    
+    // --- PERUBAHAN BARU: SIMPAN ID SESI DAN AKTIFKAN PRE-LOCKING SEGERA ---
+    await _saveCurrentSessionId();
+    
+    if (_isLockSystemEnabledOnThisSession) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isAppLocked', true);
+      await prefs.setString('lastExamUrl', widget.examUrl);
+      await prefs.setString('lastLockReason', "Aplikasi ditutup tidak wajar saat sesi ujian.");
+      debugPrint("PRE-LOCKING AKTIF: Status terkunci berhasil disimpan.");
+    }
   }
 
   // --- FUNGSI BARU UNTUK MENYIMPAN ID SESI ---
@@ -1193,6 +1203,40 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
           ),
           title: const Text('Ujian'),
           actions: [
+            // Indikator Keamanan
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: _isLockSystemEnabledOnThisSession ? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _isLockSystemEnabledOnThisSession ? Colors.green : Colors.red,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _isLockSystemEnabledOnThisSession ? Icons.security : Icons.security_outlined,
+                      size: 14,
+                      color: _isLockSystemEnabledOnThisSession ? Colors.green : Colors.red,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _isLockSystemEnabledOnThisSession ? 'SAFE ON' : 'SAFE OFF',
+                      style: TextStyle(
+                        color: _isLockSystemEnabledOnThisSession ? Colors.green : Colors.red,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             Center(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Text(_currentTime, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)))),
             if(_isWebViewSupported)
               IconButton(
