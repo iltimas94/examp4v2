@@ -213,7 +213,6 @@ class _StartupScreenState extends State<StartupScreen> {
         debugPrint("Validasi Sesi: Sesi Tersimpan='$savedSessionId', Sesi Saat Ini='$currentSessionId'");
 
         // Jika ID sesi berbeda, berarti sesi sudah berakhir atau data sesi lokal tidak valid/lama.
-        // Ini akan menangani kasus di mana savedSessionId adalah 'none' (null/kosong).
         if (savedSessionId != currentSessionId) {
           debugPrint("Sesi Ujian telah berubah atau tidak valid. Membuka kunci secara otomatis.");
           await _clearLockData(prefs);
@@ -730,6 +729,7 @@ class ExamListScreen extends StatefulWidget {
 class _ExamListScreenState extends State<ExamListScreen> {
   List<Exam> _exams = [];
   bool _isLoading = true;
+  String _errorMessage = "";
 
   @override
   void initState() {
@@ -739,15 +739,21 @@ class _ExamListScreenState extends State<ExamListScreen> {
 
   Future<void> _fetchExams() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = "";
+    });
     try {
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
       const String gid = '787301166';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
-      final response = await http.get(Uri.parse(csvUrl));
+      
+      final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 15));
+      
       if (mounted) {
         if (response.statusCode == 200) {
-          final lines = response.body.split('\r\n').skip(1);
+          // Mendukung berbagai format baris baru (\n atau \r\n)
+          final lines = response.body.split(RegExp(r'\r\n|\n')).where((line) => line.trim().isNotEmpty).skip(1);
           final List<Exam> exams = [];
           for (final line in lines) {
             final parts = line.split(',');
@@ -760,11 +766,19 @@ class _ExamListScreenState extends State<ExamListScreen> {
               ));
             }
           }
-          setState(() => _exams = exams);
+          setState(() {
+            _exams = exams;
+            if (exams.isEmpty) _errorMessage = "Tidak ada ujian tersedia saat ini.";
+          });
+        } else {
+          setState(() => _errorMessage = "Gagal memuat data (Error: ${response.statusCode})");
         }
       }
     } catch (e) {
       debugPrint("Failed to fetch exams: $e");
+      if (mounted) {
+        setState(() => _errorMessage = "Kendala koneksi atau server. Silakan coba lagi.");
+      }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -786,6 +800,22 @@ class _ExamListScreenState extends State<ExamListScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
+          : _errorMessage.isNotEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red, size: 60),
+                    const SizedBox(height: 10),
+                    Text(_errorMessage, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+                    const SizedBox(height: 20),
+                    ElevatedButton(onPressed: _fetchExams, child: const Text("Coba Lagi")),
+                  ],
+                ),
+              ),
+            )
           : GridView.builder(
         padding: const EdgeInsets.all(8),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -801,10 +831,18 @@ class _ExamListScreenState extends State<ExamListScreen> {
             clipBehavior: Clip.antiAlias,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             child: InkWell(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => ExamContentScreen(examUrl: exam.link)),
-                );
+              onTap: () async {
+                // PRE-LOCKING SEBELUM PINDAH HALAMAN
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('isAppLocked', true);
+                await prefs.setString('lastExamUrl', exam.link);
+                await prefs.setString('lastLockReason', "Aplikasi ditutup tidak wajar saat sesi ujian.");
+                
+                if (context.mounted) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => ExamContentScreen(examUrl: exam.link)),
+                  );
+                }
               },
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
