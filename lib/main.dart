@@ -216,6 +216,7 @@ class _StartupScreenState extends State<StartupScreen> {
         if (savedSessionId != currentSessionId) {
           debugPrint("Sesi Ujian telah berubah atau tidak valid. Membuka kunci secara otomatis.");
           await _clearLockData(prefs);
+          await prefs.remove('lockCount'); // Reset hitungan hanya jika sesi berganti
           if (mounted) {
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(builder: (context) => const TokenScreen()),
@@ -232,6 +233,13 @@ class _StartupScreenState extends State<StartupScreen> {
 
     // Jika semua pemeriksaan lolos (sesi sama atau validasi gagal), tampilkan layar kunci.
     final String? lockReason = prefs.getString('lastLockReason');
+    
+    // Tambahkan hitungan pelanggaran (Tutup Paksa)
+    int currentCount = prefs.getInt('lockCount') ?? 0;
+    currentCount++;
+    await prefs.setInt('lockCount', currentCount);
+    debugPrint("Pelanggaran Tutup Paksa Terdeteksi. Total: $currentCount");
+
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
@@ -239,6 +247,7 @@ class _StartupScreenState extends State<StartupScreen> {
             initialLockReason: lockReason,
             savedSession: savedSessionId,
             currentSession: currentSessionId,
+            lockCount: currentCount,
           ),
         ),
       );
@@ -250,7 +259,8 @@ class _StartupScreenState extends State<StartupScreen> {
     await prefs.remove('lastExamUrl');
     await prefs.remove('lastLockReason');
     await prefs.remove('lockTimestamp');
-    await prefs.remove('lockSessionId'); // Pastikan ini juga dihapus
+    await prefs.remove('lockSessionId');
+    // lockCount TIDAK dihapus di sini agar tetap berlanjut dalam satu sesi
   }
 
   @override
@@ -264,12 +274,14 @@ class TokenScreen extends StatefulWidget {
   final String? initialLockReason;
   final String? savedSession;
   final String? currentSession;
+  final int? lockCount;
 
   const TokenScreen({
     super.key,
     this.initialLockReason,
     this.savedSession,
     this.currentSession,
+    this.lockCount,
   });
 
   @override
@@ -289,6 +301,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
   bool _dndCheckBypassed = false;
 
   String? _lockReason;
+  int _lockCount = 0;
   final TextEditingController _adminCodeController = TextEditingController();
   String? _correctAdminCode;
   String _adminCodeError = "";
@@ -301,6 +314,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     _initPackageInfo();
 
     _lockReason = widget.initialLockReason;
+    _lockCount = widget.lockCount ?? 0;
     if (_lockReason != null) {
       _fetchAdminCode();
       _isLoading = false;
@@ -441,6 +455,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     await prefs.remove('lastLockReason');
     await prefs.remove('lockTimestamp');
     await prefs.remove('lockSessionId');
+    // lockCount dipertahankan
   }
 
   Future<void> _fetchAdminCode() async {
@@ -592,6 +607,8 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                           Text('Sesi Tersimpan: ${widget.savedSession ?? "None"}', style: const TextStyle(color: Colors.white, fontSize: 13)),
                           const SizedBox(height: 4),
                           Text('Sesi Server: ${widget.currentSession ?? "Gagal Memuat"}', style: const TextStyle(color: Colors.blueAccent, fontSize: 13, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Text('Total Pelanggaran: $_lockCount', style: const TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
@@ -837,6 +854,7 @@ class _ExamListScreenState extends State<ExamListScreen> {
                 await prefs.setBool('isAppLocked', true);
                 await prefs.setString('lastExamUrl', exam.link);
                 await prefs.setString('lastLockReason', "Aplikasi ditutup tidak wajar saat sesi ujian.");
+                // lockCount tidak di-reset di sini, melainkan mengikuti sesi server
                 
                 if (context.mounted) {
                   Navigator.of(context).push(
@@ -893,6 +911,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   static const brightnessChannel = MethodChannel('com.example.exam_browser/brightness');
   late final WebViewController _controller;
   String? _lockReason;
+  int _lockCount = 0;
   StreamSubscription? _lockReasonSubscription;
   late Timer _timer;
   String _currentTime = '';
@@ -960,8 +979,12 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
       if (mounted) {
         if (_correctAdminCode == null) await _fetchAdminCode();
 
+        int currentCount = (prefs.getInt('lockCount') ?? 0) + 1;
+        await prefs.setInt('lockCount', currentCount);
+
         setState(() {
           _lockReason = reason;
+          _lockCount = currentCount;
         });
 
         if (reason != null) {
@@ -983,6 +1006,9 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     
     if (_isLockSystemEnabledOnThisSession) {
       final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _lockCount = prefs.getInt('lockCount') ?? 0;
+      });
       await prefs.setBool('isAppLocked', true);
       await prefs.setString('lastExamUrl', widget.examUrl);
       await prefs.setString('lastLockReason', "Aplikasi ditutup tidak wajar saat sesi ujian.");
@@ -1087,6 +1113,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     await prefs.remove('lastLockReason');
     await prefs.remove('lockTimestamp');
     await prefs.remove('lockSessionId');
+    // lockCount dipertahankan
   }
 
   Future<void> _exitExamMode() async {
@@ -1378,7 +1405,13 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                           if (_lockReason != null)
                             Padding(
                               padding: const EdgeInsets.only(top: 15.0),
-                              child: Text(_lockReason!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)),
+                              child: Column(
+                                children: [
+                                  Text(_lockReason!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.yellowAccent, fontSize: 16, fontStyle: FontStyle.italic)),
+                                  const SizedBox(height: 10),
+                                  Text('Pelanggaran Sesi Ini: $_lockCount', style: const TextStyle(color: Colors.orangeAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
                             ),
                         ],
                       ),
