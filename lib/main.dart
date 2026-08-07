@@ -521,8 +521,8 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
       floatingActionButton: showFab
           ? FloatingActionButton(
         onPressed: _refreshData,
-        child: const Icon(Icons.refresh),
         tooltip: 'Refresh Data Ujian',
+        child: const Icon(Icons.refresh),
       )
           : null,
       body: Stack(
@@ -538,7 +538,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Container(
-        color: Colors.black.withOpacity(0.90),
+        color: Colors.black.withValues(alpha: 0.90),
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(20.0),
@@ -596,7 +596,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.1),
+                        color: Colors.white.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.white24),
                       ),
@@ -634,7 +634,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
             const Text('Izin Diperlukan', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 15),
             const Text(
-              'Untuk kelancaran ujian, aplikasi ini memerlukan izin untuk mengaktifkan mode \"Jangan Ganggu\".',
+              'Untuk kelancaran ujian, aplikasi ini memerlukan izin untuk mengaktifkan mode "Jangan Ganggu".',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16, color: Colors.black54),
             ),
@@ -987,12 +987,10 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
           _lockCount = currentCount;
         });
 
-        if (reason != null) {
-          await prefs.setBool('isAppLocked', true);
-          await prefs.setString('lastExamUrl', widget.examUrl);
-          await prefs.setString('lastLockReason', reason);
-          await prefs.setInt('lockTimestamp', DateTime.now().millisecondsSinceEpoch);
-        }
+        await prefs.setBool('isAppLocked', true);
+        await prefs.setString('lastExamUrl', widget.examUrl);
+        await prefs.setString('lastLockReason', reason);
+        await prefs.setInt('lockTimestamp', DateTime.now().millisecondsSinceEpoch);
       }
     });
   }
@@ -1166,6 +1164,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     }
 
     if (_correctAdminCode == null) await _fetchAdminCode();
+    if (!mounted) return false;
 
     final TextEditingController dialogAdminCodeController = TextEditingController();
     String? dialogError;
@@ -1241,14 +1240,19 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   Widget build(BuildContext context) {
     bool isActuallyLocked = _lockReason != null;
 
-    return WillPopScope(
-      onWillPop: () async {
-        if (isActuallyLocked) return false;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (isActuallyLocked) return;
 
-        return _showAdminAuthDialog(
+        final bool shouldPop = await _showAdminAuthDialog(
           title: 'Kembali ke Daftar Ujian?',
           content: 'Untuk keluar dari ujian ini, masukkan kode admin.',
         );
+        if (shouldPop && context.mounted) {
+          Navigator.of(context).pop();
+        }
       },
       child: Scaffold(
         appBar: AppBar(
@@ -1261,7 +1265,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                 title: 'Kembali ke Daftar Ujian?',
                 content: 'Untuk keluar dari ujian ini, masukkan kode admin.',
               );
-              if (canPop && mounted) {
+              if (canPop && context.mounted) {
                 Navigator.of(context).pop();
               }
             },
@@ -1274,7 +1278,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 margin: const EdgeInsets.only(right: 8),
                 decoration: BoxDecoration(
-                  color: _isLockSystemEnabledOnThisSession ? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2),
+                  color: _isLockSystemEnabledOnThisSession ? Colors.green.withValues(alpha: 0.2) : Colors.red.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _isLockSystemEnabledOnThisSession ? Colors.green : Colors.red,
@@ -1313,8 +1317,8 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                       title: const Text('Refresh Halaman?'),
                       content: const Text('Apakah Anda yakin ingin memuat ulang halaman ujian? Progres yang belum tersimpan mungkin akan hilang.'),
                       actions: <Widget>[
-                        TextButton(child: const Text('Batal'), onPressed: () => Navigator.of(context).pop(false)),
-                        TextButton(child: const Text('Ya, Refresh'), onPressed: () => Navigator.of(context).pop(true)),
+                        TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Batal')),
+                        TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Ya, Refresh')),
                       ],
                     ),
                   );
@@ -1333,7 +1337,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   content: 'Untuk keluar dari sesi ujian dan kembali ke halaman token, masukkan kode admin.',
                 );
 
-                if (canNavigateHome && mounted) {
+                if (canNavigateHome && context.mounted) {
                   Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute(builder: (context) => const TokenScreen()),
                         (route) => false,
@@ -1353,7 +1357,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
               GestureDetector(
                 onTap: () => FocusScope.of(context).unfocus(),
                 child: Container(
-                  color: Colors.black.withOpacity(0.90),
+                  color: Colors.black.withValues(alpha: 0.90),
                   child: Center(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(20.0),
