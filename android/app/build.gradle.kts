@@ -3,6 +3,7 @@ import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
 }
@@ -22,10 +23,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     signingConfigs {
@@ -60,10 +57,14 @@ android {
     }
 }
 
+dependencies {
+    // Diganti dari play:core lama yang tidak kompatibel dengan SDK 34+
+    implementation("com.google.android.play:feature-delivery:2.1.0")
+    implementation("com.google.android.play:app-update:2.1.0")
+    implementation("com.google.android.play:review:2.0.1")
+}
+
 flutter {
     source = "../.."
 }
 
-dependencies {
-    implementation(platform("com.google.firebase:firebase-bom:34.6.0"))
-}

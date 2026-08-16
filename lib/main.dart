@@ -6,8 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
@@ -909,7 +908,10 @@ class ExamContentScreen extends StatefulWidget {
 
 class _ExamContentScreenState extends State<ExamContentScreen> {
   static const brightnessChannel = MethodChannel('com.example.exam_browser/brightness');
-  late final WebViewController _controller;
+
+  // --- KONFIGURASI WEBVIEW (InAppWebView) ---
+  InAppWebViewController? _webViewController;
+
   String? _lockReason;
   int _lockCount = 0;
   StreamSubscription? _lockReasonSubscription;
@@ -931,39 +933,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     _lockReason = widget.initialLockReason;
 
     _initializeSessionSettings();
-
-    if (_isWebViewSupported) {
-      late final PlatformWebViewControllerCreationParams params;
-      if (WebViewPlatform.instance is AndroidWebViewPlatform) {
-        params = AndroidWebViewControllerCreationParams();
-      } else {
-        params = const PlatformWebViewControllerCreationParams();
-      }
-
-      final WebViewController controller = WebViewController.fromPlatformCreationParams(params);
-
-      _controller = controller
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(const Color(0x00000000))
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageStarted: (String url) {},
-            onNavigationRequest: (NavigationRequest request) {
-              if (_lockReason != null) return NavigationDecision.prevent;
-              if (request.url.startsWith(widget.examUrl) || request.url.contains(".google.com")) {
-                return NavigationDecision.navigate;
-              }
-              return NavigationDecision.prevent;
-            },
-          ),
-        )
-        ..loadRequest(Uri.parse(widget.examUrl));
-
-      if (controller.platform is AndroidWebViewController) {
-        (controller.platform as AndroidWebViewController).setMediaPlaybackRequiresUserGesture(false);
-      }
-    }
-
+    _initializeExamMode();
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) => _updateTime());
 
@@ -1067,12 +1037,6 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     setState(() {
       _currentTime = DateFormat('HH:mm:ss').format(DateTime.now());
     });
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _initializeExamMode();
   }
 
   Future<void> _fetchAdminCode() async {
@@ -1323,7 +1287,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                     ),
                   );
                   if (shouldReload ?? false) {
-                    _controller.reload();
+                    _webViewController?.reload();
                   }
                 },
               ),
@@ -1350,7 +1314,78 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
         body: Stack(
           children: [
             if (_isWebViewSupported)
-              WebViewWidget(controller: _controller)
+              InAppWebView(
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  transparentBackground: true,
+                  supportMultipleWindows: true,
+                  javaScriptCanOpenWindowsAutomatically: true,
+                  allowFileAccess: true,
+                  useHybridComposition: true,
+                  thirdPartyCookiesEnabled: true,
+                  // TAMBAHKAN INI: Memastikan database & storage aktif untuk menyimpan sesi login
+                  domStorageEnabled: true,
+                  databaseEnabled: true,
+                  cacheEnabled: true,
+                  // USER AGENT: Menggunakan string yang lebih standar agar Google tidak curiga
+                  userAgent: "Mozilla/5.0 (Linux; Android 13; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                ),
+                onWebViewCreated: (controller) {
+                  _webViewController = controller;
+                },
+                onLoadStart: (controller, url) async {
+                  if (url != null) {
+                    final urlStr = url.toString();
+                    // JIKA DI HALAMAN LOGIN GOOGLE: Matikan keamanan agar Autofill/Account Picker sistem bisa muncul
+                    // Kita perluas deteksinya ke domain google login yang lain
+                    if (urlStr.contains("accounts.google.com") || urlStr.contains("accounts.youtube.com")) {
+                      await NativeSecureFlagService.clearSecureFlag();
+                      await ActivityMonitorService.stopMonitoring();
+                      debugPrint("Login Phase: Security Temporarily Disabled for Autofill support.");
+                    } else if (urlStr.startsWith(widget.examUrl) || urlStr.contains("docs.google.com/forms")) {
+                      // JIKA KEMBALI KE FORM/DOMAIN UJIAN: Aktifkan kembali keamanan
+                      await NativeSecureFlagService.setSecureFlag();
+                      await ActivityMonitorService.initializeMonitoring();
+                      debugPrint("Exam Phase: Security Re-enabled.");
+                    }
+                  }
+                  debugPrint("Halaman mulai dimuat: ${url?.toString() ?? 'null'}");
+                },
+                onLoadStop: (controller, url) {
+                  debugPrint("Halaman dimuat: ${url?.toString() ?? 'null'}");
+                },
+                shouldOverrideUrlLoading: (controller, navigationAction) async {
+                  final url = navigationAction.request.url;
+                  if (_lockReason != null) return NavigationActionPolicy.CANCEL;
+                  final String urlStr = url.toString();
+                  // Izinkan navigasi ke domain ujian dan google (termasuk
+                  // accounts.google.com untuk login dan accounts.google.com
+                  // untuk account picker)
+                  if (urlStr.startsWith(widget.examUrl) ||
+                      urlStr.contains('.google.com') ||
+                      urlStr.contains('googleusercontent.com') ||
+                      urlStr.contains('accounts.google.com')) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+                  // Blokir navigasi ke luar domain yang diizinkan
+                  return NavigationActionPolicy.CANCEL;
+                },
+                onCreateWindow: (controller, createWindowRequest) async {
+                  // Popup dari Google (mis. login) yang tetap ingin dibuka:
+                  // Muat URL popup di WebView utama agar account picker muncul.
+                  final reqUrl = createWindowRequest.request.url;
+                  if (reqUrl != null) {
+                    await controller.loadUrl(urlRequest: URLRequest(url: WebUri.uri(reqUrl)));
+                    return false;
+                  }
+                  return true;
+                },
+                onCloseWindow: (controller) {},
+                onReceivedError: (controller, request, error) {
+                  debugPrint('WebView Error: ${error.description}');
+                },
+                initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(widget.examUrl))),
+              )
             else
               const Center(child: Text('Fitur ujian tidak didukung di platform ini.')),
             if (isActuallyLocked)
