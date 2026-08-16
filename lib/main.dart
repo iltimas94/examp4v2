@@ -197,6 +197,21 @@ class _StartupScreenState extends State<StartupScreen> {
       return;
     }
 
+    // --- PERUBAHAN BARU: CEK STATUS SISTEM KUNCI DARI SERVER ---
+    // Jika keamanan dimatikan (SAFE OFF), buka kunci otomatis meskipun sesi sama.
+    final bool lockSystemEnabled = await _fetchLockSystemStatus();
+    if (!lockSystemEnabled) {
+      debugPrint("Sistem kunci OFF. Membuka kunci otomatis dan langsung ke halaman token.");
+      await _clearLockData(prefs);
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const TokenScreen()),
+        );
+      }
+      return;
+    }
+    // --- AKHIR PERUBAHAN BARU ---
+
     String? currentSessionId;
     String? savedSessionId = prefs.getString('lockSessionId');
 
@@ -250,6 +265,26 @@ class _StartupScreenState extends State<StartupScreen> {
           ),
         ),
       );
+    }
+  }
+
+  // --- FUNGSI BARU: MENGAMBIL STATUS SISTEM KUNCI DARI SERVER ---
+  Future<bool> _fetchLockSystemStatus() async {
+    try {
+      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String gid = '522874477';
+      const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
+      final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final status = response.body.trim().toUpperCase();
+        debugPrint("Status Sistem Kunci (Startup): $status");
+        return status == 'ON';
+      }
+      return true; // Fallback aman: jika gagal, anggap ON agar tidak ada celah
+    } catch (e) {
+      debugPrint("Gagal mengambil status sistem kunci (Startup), menganggap ON. Error: $e");
+      return true; // Fallback aman: jika error, anggap ON agar tidak ada celah
     }
   }
 
