@@ -237,6 +237,7 @@ class MainActivity: FlutterActivity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         setDndMode(false)
         super.onDestroy()
     }

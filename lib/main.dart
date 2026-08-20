@@ -16,6 +16,84 @@ class Exam {
   Exam({required this.image, required this.mapel, required this.waktu, required this.link});
 }
 
+// --- WIDGET VISUAL PENGGANTI GAMBAR (Efisien & Cepat) ---
+class SubjectThumbnail extends StatelessWidget {
+  final String mapel;
+  const SubjectThumbnail({super.key, required this.mapel});
+
+  IconData _getIcon() {
+    final name = mapel.toLowerCase();
+    if (name.contains('matematika')) return Icons.calculate;
+    if (name.contains('ipa') || name.contains('biologi') || name.contains('fisika') || name.contains('kimia')) return Icons.science;
+    if (name.contains('bahasa')) return Icons.translate;
+    if (name.contains('inggris')) return Icons.language;
+    if (name.contains('ips') || name.contains('sejarah') || name.contains('geografi') || name.contains('ekonomi')) return Icons.public;
+    if (name.contains('agama') || name.contains('budi pekerti')) return Icons.menu_book;
+    if (name.contains('olahraga') || name.contains('pjok') || name.contains('jasmani')) return Icons.sports_soccer;
+    if (name.contains('seni') || name.contains('prakarya') || name.contains('budaya')) return Icons.palette;
+    if (name.contains('tik') || name.contains('informatika') || name.contains('komputer')) return Icons.computer;
+    if (name.contains('pkn') || name.contains('pancasila') || name.contains('kewarganegaraan')) return Icons.gavel;
+    if (name.contains('bimbingan') || name.contains('bk')) return Icons.psychology;
+    return Icons.assignment; // Default icon
+  }
+
+  List<Color> _getGradient() {
+    final name = mapel.toLowerCase();
+    // Gunakan hash dari nama mata pelajaran agar warna unik tapi konsisten
+    final int hash = mapel.hashCode.abs();
+    
+    // Daftar kombinasi warna yang cantik
+    final List<List<Color>> gradients = [
+      [Colors.blue, Colors.blueAccent],
+      [Colors.green, Colors.teal],
+      [Colors.orange, Colors.deepOrange],
+      [Colors.brown, Colors.blueGrey],
+      [Colors.cyan, Colors.tealAccent.shade700],
+      [Colors.red, Colors.deepOrangeAccent],
+      [Colors.purple, Colors.deepPurple],
+      [Colors.indigo, Colors.blueAccent],
+      [Colors.pink, Colors.redAccent],
+      [Colors.teal, Colors.greenAccent.shade700],
+      [Colors.amber.shade700, Colors.orange.shade900],
+      [Colors.deepPurple, Colors.indigoAccent],
+    ];
+
+    // Jika mapel terdaftar, berikan warna spesifik (Opsional)
+    if (name.contains('matematika')) return gradients[0];
+    if (name.contains('ipa')) return gradients[1];
+    if (name.contains('bahasa')) return gradients[2];
+    if (name.contains('ips')) return gradients[3];
+    if (name.contains('agama')) return gradients[4];
+    if (name.contains('olahraga')) return gradients[5];
+    if (name.contains('seni')) return gradients[6];
+    if (name.contains('tik')) return gradients[7];
+    if (name.contains('pkn')) return gradients[8];
+
+    // Jika tidak terdaftar, pilih gradient berdasarkan hash agar tetap berwarna-warni
+    return gradients[hash % gradients.length];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: _getGradient(),
+        ),
+      ),
+      child: Center(
+        child: Icon(
+          _getIcon(),
+          size: 60,
+          color: Colors.white.withValues(alpha: 0.8),
+        ),
+      ),
+    );
+  }
+}
+
 // --- KELAS-KELAS SERVICE NATIVE ---
 class NativeSecureFlagService {
   static const _platform = MethodChannel('com.example.exam_browser/secure_flag');
@@ -121,13 +199,23 @@ class StartupScreen extends StatefulWidget {
 }
 
 class _StartupScreenState extends State<StartupScreen> {
+  String _loadingStatus = "Menghubungkan ke server...";
+
   @override
   void initState() {
     super.initState();
-    _checkVersionAndNavigate();
+    _startStartupProcess();
   }
 
-  Future<void> _checkVersionAndNavigate() async {
+  Future<void> _startStartupProcess() async {
+    setState(() => _loadingStatus = "Memeriksa versi...");
+    await _checkVersion();
+    
+    setState(() => _loadingStatus = "Sinkronisasi data...");
+    await _checkLockStatusAndNavigate();
+  }
+
+  Future<void> _checkVersion() async {
     final PackageInfo info = await PackageInfo.fromPlatform();
     final int localVersion = int.parse(info.buildNumber);
     debugPrint("DEBUG_VERSION: Versi Lokal = $localVersion");
@@ -136,14 +224,13 @@ class _StartupScreenState extends State<StartupScreen> {
       const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
       const String gid = '85520264';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
-      final response = await http.get(Uri.parse(csvUrl));
+      final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final int latestVersion = int.parse(response.body.trim());
         debugPrint("DEBUG_VERSION: Versi Server = $latestVersion");
         
         if (localVersion < latestVersion) {
-          debugPrint("DEBUG_VERSION: Update diperlukan (Lokal < Server)");
           if (mounted) {
             await showDialog<void>(
               context: context,
@@ -163,15 +250,11 @@ class _StartupScreenState extends State<StartupScreen> {
             );
           }
           return;
-        } else {
-          debugPrint("DEBUG_VERSION: Versi sudah sesuai atau lebih baru.");
         }
       }
     } catch (e) {
       debugPrint("DEBUG_VERSION: Gagal cek versi: $e");
     }
-
-    _checkLockStatusAndNavigate();
   }
 
   void _launchPlayStore() async {
@@ -181,14 +264,64 @@ class _StartupScreenState extends State<StartupScreen> {
     }
   }
 
+  // --- FUNGSI BARU: MENGAMBIL TOKEN DARI SERVER ---
+  Future<String?> _fetchCurrentToken() async {
+    try {
+      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String gid = '0';
+      const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
+      final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        String fetchedToken = response.body.trim();
+        if (fetchedToken.isNotEmpty) {
+          return fetchedToken.split(',')[0].trim();
+        }
+      }
+    } catch (e) {
+      debugPrint("Startup: Gagal mengambil token server: $e");
+    }
+    return null;
+  }
+
   // --- FUNGSI DENGAN LOGIKA SESI YANG DISEMPURNAKAN ---
   Future<void> _checkLockStatusAndNavigate() async {
     final prefs = await SharedPreferences.getInstance();
     final bool isLocked = prefs.getBool('isAppLocked') ?? false;
 
-    // Jika tidak ada data kunci sama sekali, langsung ke halaman token
+    // Jika tidak ada data kunci sama sekali, cek auto-login token
     if (!isLocked) {
       await _clearLockData(prefs); // Pastikan bersih
+
+      // LOGIKA AUTO-LOGIN TOKEN
+      final String? serverToken = await _fetchCurrentToken();
+      final String? savedToken = prefs.getString('savedExamToken');
+
+      debugPrint("Auto-Login Check: Server='$serverToken', Saved='$savedToken'");
+
+      if (serverToken != null && savedToken != null && serverToken == savedToken) {
+        // Cek Izin DND (Do Not Disturb) - Penting untuk keamanan
+        bool dndGranted = false;
+        if (kIsWeb || !Platform.isAndroid) {
+          dndGranted = true;
+        } else {
+          const dndChannel = MethodChannel('com.example.exam_browser/dnd');
+          try {
+            final bool? granted = await dndChannel.invokeMethod('checkDndPermission');
+            dndGranted = granted ?? false;
+          } catch (_) {}
+        }
+
+        if (dndGranted && mounted) {
+          debugPrint("Token Cocok & Izin DND Ada => Langsung ke Daftar Ujian.");
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (context) => const ExamListScreen()),
+          );
+          return;
+        } else {
+          debugPrint("Auto-login tertunda: Izin DND belum ada.");
+        }
+      }
+
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const TokenScreen()),
@@ -299,7 +432,21 @@ class _StartupScreenState extends State<StartupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 20),
+            Text(
+              _loadingStatus,
+              style: const TextStyle(color: Colors.grey, fontSize: 14),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -309,6 +456,7 @@ class TokenScreen extends StatefulWidget {
   final String? savedSession;
   final String? currentSession;
   final int? lockCount;
+  final bool bypassAutoLogin;
 
   const TokenScreen({
     super.key,
@@ -316,6 +464,7 @@ class TokenScreen extends StatefulWidget {
     this.savedSession,
     this.currentSession,
     this.lockCount,
+    this.bypassAutoLogin = false,
   });
 
   @override
@@ -415,6 +564,11 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     });
     await _fetchExamToken();
     await _fetchExamNote();
+    if (!widget.bypassAutoLogin) {
+      await _checkSavedTokenAutoLogin(); // auto-login jika tidak dibypass
+    } else {
+      debugPrint("Auto-login dibypass karena navigasi dari Home.");
+    }
     if (mounted) {
       setState(() => _isLoading = false);
     }
@@ -463,7 +617,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _validateToken() {
+  Future<void> _validateToken() async {
     if (_correctExamToken == null) {
       _refreshData();
       setState(() => _tokenError = "Token belum terambil. Mencoba memuat ulang...");
@@ -472,6 +626,15 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
     if (_tokenController.text == _correctExamToken) {
       setState(() => _tokenError = "");
+      // Simpan token yang tersob sekali ini untuk auto-login di lain waktu.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('savedExamToken', _tokenController.text);
+        debugPrint("Token ujian tersimpan untuk auto-login di lain waktu.");
+      } catch (e) {
+        debugPrint("Gagal menyimpan token: $e");
+      }
+      if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const ExamListScreen()),
       );
@@ -479,6 +642,29 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
       setState(() => _tokenError = "Token ujian salah.");
       _tokenController.clear();
       HapticFeedback.mediumImpact();
+    }
+  }
+
+  // Auto-login: kalok token terakhir yang dimasukkan sama dengan token
+  // terkini dari spreadsheet, langsung masuk tanpa disuruh mengetik.
+  // Hanya berlaku mode normal (bukan kunci admin/force-close).
+  Future<void> _checkSavedTokenAutoLogin() async {
+    if (_lockReason != null || !mounted) return;
+    if (_correctExamToken == null || _correctExamToken!.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? savedToken = prefs.getString('savedExamToken');
+      if (savedToken != null &&
+          savedToken.isNotEmpty &&
+          savedToken == _correctExamToken) {
+        debugPrint("Token tersimpan sama dengan server => otomatis masuk.");
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const ExamListScreen()),
+        );
+      }
+    } catch (e) {
+      debugPrint("Gagal memverifikasikan token tersimpan: $e");
     }
   }
 
@@ -842,6 +1028,16 @@ class _ExamListScreenState extends State<ExamListScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Pilih Ujian'),
+        leading: IconButton(
+          icon: const Icon(Icons.home),
+          onPressed: () {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (context) => const TokenScreen(bypassAutoLogin: true),
+              ),
+            );
+          },
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -900,11 +1096,7 @@ class _ExamListScreenState extends State<ExamListScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: Image.network(
-                      exam.image,
-                      fit: BoxFit.cover,
-                      errorBuilder: (c, o, s) => const Icon(Icons.error, size: 40),
-                    ),
+                    child: SubjectThumbnail(mapel: exam.mapel),
                   ),
                   Padding(
                     padding: const EdgeInsets.all(8.0),
@@ -952,6 +1144,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   StreamSubscription? _lockReasonSubscription;
   late Timer _timer;
   String _currentTime = '';
+  double _loadProgress = 0;
 
   final TextEditingController _adminCodeController = TextEditingController();
   String? _correctAdminCode;
@@ -1358,15 +1551,18 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   allowFileAccess: true,
                   useHybridComposition: true,
                   thirdPartyCookiesEnabled: true,
-                  // TAMBAHKAN INI: Memastikan database & storage aktif untuk menyimpan sesi login
                   domStorageEnabled: true,
                   databaseEnabled: true,
                   cacheEnabled: true,
-                  // USER AGENT: Menggunakan string yang lebih standar agar Google tidak curiga
                   userAgent: "Mozilla/5.0 (Linux; Android 13; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
                 ),
                 onWebViewCreated: (controller) {
                   _webViewController = controller;
+                },
+                onProgressChanged: (controller, progress) {
+                  setState(() {
+                    _loadProgress = progress / 100;
+                  });
                 },
                 onLoadStart: (controller, url) async {
                   if (url != null) {
@@ -1423,6 +1619,21 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
               )
             else
               const Center(child: Text('Fitur ujian tidak didukung di platform ini.')),
+            
+            // PROGRESS BAR (Muncul saat loading)
+            if (_loadProgress < 1.0)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(
+                  value: _loadProgress,
+                  backgroundColor: Colors.transparent,
+                  color: Colors.blue,
+                  minHeight: 3,
+                ),
+              ),
+              
             if (isActuallyLocked)
               GestureDetector(
                 onTap: () => FocusScope.of(context).unfocus(),
