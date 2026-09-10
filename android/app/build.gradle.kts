@@ -25,6 +25,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Selaraskan target Kotlin dengan Java (17) agar tidak terjadi
+    // "Inconsistent JVM-target compatibility" saat Gradle berjalan di JDK 21.
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     signingConfigs {
         create("release") {
             if (keystorePropertiesFile.exists()) {
@@ -38,7 +44,10 @@ android {
 
     defaultConfig {
         applicationId = "smpn4.malang.examp4"
-        minSdk = flutter.minSdkVersion
+        // Eksplisit minSdk 21 (Android 5.0) — mengikuti perilaku rilis 1.2.x sebelumnya.
+        // Jangan pakai flutter.minSdkVersion: Flutter 3.44 default-nya 24 (Android 7.0),
+        // yang membuat APK tidak bisa dipasang di HP jadul siswa.
+        minSdk = 21
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName

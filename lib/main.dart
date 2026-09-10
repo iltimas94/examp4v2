@@ -159,6 +159,13 @@ class ActivityMonitorService {
 // --- FUNGSI MAIN ---
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // FASE A (DIAGNOSTIK): Aktifkan remote debugging WebView HANYA pada build debug.
+  // Berguna untuk meng-inspect HP jadul dari PC via chrome://inspect.
+  if (!kIsWeb && kDebugMode && Platform.isAndroid) {
+    InAppWebViewController.setWebContentsDebuggingEnabled(true);
+  }
+
   runApp(const ExamBrowserApp());
 }
 
@@ -1146,6 +1153,24 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   String _currentTime = '';
   double _loadProgress = 0;
 
+  // --- FASE A & B: DIAGNOSTIK + PERBAIKAN WEBVIEW JADUL (LAYAR PUTIH) ---
+  // Akar masalah layar putih di HP lama:
+  //  1. UA palsu "Chrome/120" membuat Google mengirim JS modern yang tidak bisa
+  //     diparse engine WebView lama (Chrome 60-90) => SyntaxError => layar putih.
+  //  2. Renderer WebView mati di HP RAM kecil tanpa penanganan => blank permanen.
+  //  3. transparentBackground: true menyembunyikan semua kegagalan dari siswa.
+  static const String _chromeSpoofUA =
+      "Mozilla/5.0 (Linux; Android 13; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+  static const int _minWebViewMajorVersion = 90;
+
+  Key _webViewKey = UniqueKey(); // berubah saat WebView perlu dibuat ulang
+  String? _compatUserAgent;      // UA asli engine tanpa token "; wv)"
+  String? _webViewError;         // pesan error navigasi utama untuk UI
+  bool _isRendererCrashed = false;
+  bool _webViewOutdated = false;
+  bool _isCheckingWebViewVersion = true;
+  String _detectedWebViewVersion = '';
+
   final TextEditingController _adminCodeController = TextEditingController();
   String? _correctAdminCode;
   String _adminCodeError = "";
@@ -1162,6 +1187,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
 
     _initializeSessionSettings();
     _initializeExamMode();
+    _checkWebViewVersion();
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) => _updateTime());
 
@@ -1294,6 +1320,131 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     await _setBrightness(0.4);
     await NativeSecureFlagService.setSecureFlag();
     await ActivityMonitorService.initializeMonitoring();
+  }
+
+  // --- FASE A/B: CEK VERSI ENGINE WEBVIEW (deteksi dini HP jadul) ---
+  Future<void> _checkWebViewVersion() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      if (mounted) setState(() => _isCheckingWebViewVersion = false);
+      return;
+    }
+    try {
+      final WebViewPackageInfo? package =
+          await InAppWebViewController.getCurrentWebViewPackage();
+      final String version = package?.versionName ?? '';
+      final int major = int.tryParse(version.split('.').first) ?? 0;
+      debugPrint("Cek Engine WebView: versi=$version (major=$major)");
+      if (mounted) {
+        setState(() {
+          _detectedWebViewVersion = version;
+          _webViewOutdated = major > 0 && major < _minWebViewMajorVersion;
+          _isCheckingWebViewVersion = false;
+        });
+      }
+    } catch (e) {
+      // Gagal memeriksa => jangan blokir siswa (fail open), cukup dicatat.
+      debugPrint("Gagal memeriksa versi WebView, lanjut memuat halaman: $e");
+      if (mounted) setState(() => _isCheckingWebViewVersion = false);
+    }
+  }
+
+  // --- FASE B: USER-AGENT KOMPATIBEL (akar perbaikan layar putih) ---
+  // UA asli engine DIPERTAHANKAN (versi Chrome jujur) tapi token "; wv)"
+  // dihilangkan. Efeknya:
+  //  - Google Forms menyajikan JS yang sesuai kemampuan engine lama
+  //    (bukan bundle modern yang memicu SyntaxError => layar putih).
+  //  - Login Google tetap diterima karena tidak lagi terdeteksi sebagai WebView
+  //    (token "; wv)" adalah pemicu pesan "browser tidak aman").
+  Future<void> _applyCompatUserAgent(InAppWebViewController controller) async {
+    try {
+      if (_compatUserAgent == null) {
+        final settings = await controller.getSettings();
+        final String? realUA = settings?.userAgent;
+        if (realUA != null && realUA.contains('; wv)')) {
+          _compatUserAgent = realUA.replaceFirst('; wv)', ')');
+          // Buang suffix non-standar dari plugin agar Google tidak curiga.
+          _compatUserAgent =
+              _compatUserAgent!.replaceFirst(RegExp(r'\s*FlutterInAppWebView/[\d.]+\s*$'), '');
+        } else if (realUA != null && realUA.isNotEmpty) {
+          _compatUserAgent = realUA;
+        } else {
+          // Fallback terakhir: UA lama (perilaku sebelumnya) agar login tidak rusak.
+          _compatUserAgent = _chromeSpoofUA;
+        }
+      }
+      await controller.setSettings(
+        settings: InAppWebViewSettings(userAgent: _compatUserAgent),
+      );
+      debugPrint("User-Agent kompatibel aktif: $_compatUserAgent");
+    } catch (e) {
+      debugPrint("Gagal menerapkan UA kompatibel: $e");
+    }
+  }
+
+  // --- FASE B: PEMULIHAN WEBVIEW SAAT GAGAL MUAT ---
+  Future<void> _retryWebView() async {
+    setState(() {
+      _webViewError = null;
+      _isRendererCrashed = false;
+    });
+    final controller = _webViewController;
+    if (controller != null) {
+      try {
+        // buang cache yang mungkin rusak/usang sebelum memuat ulang
+        await InAppWebViewController.clearAllCache();
+      } catch (e) {
+        debugPrint("Gagal membersihkan cache WebView: $e");
+      }
+      await controller.reload();
+    } else {
+      // Belum ada controller: paksa WebView dibuat ulang dengan URL awal.
+      setState(() => _webViewKey = UniqueKey());
+    }
+  }
+
+  // --- FASE B: PANEL PERINGATAN ENGINE WEBVIEW USANG ---
+  Widget _buildWebViewOutdatedPanel() {
+    return Container(
+      color: Colors.white,
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.system_update_alt, color: Colors.orange, size: 70),
+              const SizedBox(height: 16),
+              const Text(
+                'Engine WebView HP Terlalu Lama',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Versi Android System WebView terdeteksi: '
+                '${_detectedWebViewVersion.isEmpty ? "tidak diketahui" : _detectedWebViewVersion}\n\n'
+                'Google Forms membutuhkan engine minimal Chrome/$_minWebViewMajorVersion. '
+                'Inilah penyebab halaman tampil putih di HP ini.\n\n'
+                'Minta pengawas memperbarui "Android System WebView" lewat Play Store, '
+                'atau gunakan HP lain.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: () {
+                  setState(() => _isCheckingWebViewVersion = true);
+                  _checkWebViewVersion();
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('Periksa Ulang'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _clearLockData() async {
@@ -1541,11 +1692,19 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
         ),
         body: Stack(
           children: [
-            if (_isWebViewSupported)
+            if (!_isWebViewSupported)
+              const Center(child: Text('Fitur ujian tidak didukung di platform ini.'))
+            else if (_isCheckingWebViewVersion)
+              const Center(child: CircularProgressIndicator())
+            else if (_webViewOutdated)
+              _buildWebViewOutdatedPanel()
+            else
               InAppWebView(
+                key: _webViewKey,
                 initialSettings: InAppWebViewSettings(
                   javaScriptEnabled: true,
-                  transparentBackground: true,
+                  // FASE B: background solid — kegagalan render tidak lagi tampak putih polos
+                  transparentBackground: false,
                   supportMultipleWindows: true,
                   javaScriptCanOpenWindowsAutomatically: true,
                   allowFileAccess: true,
@@ -1554,10 +1713,25 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   domStorageEnabled: true,
                   databaseEnabled: true,
                   cacheEnabled: true,
-                  userAgent: "Mozilla/5.0 (Linux; Android 13; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                  // FASE B: izinkan aset http di halaman https (mode kompatibel ala
+                  // browser modern), untuk link ujian yang tidak full-https.
+                  mixedContentMode: MixedContentMode.MIXED_CONTENT_COMPATIBILITY_MODE,
+                  // FASE B: TANPA UA palsu di sini. UA kompatibel (versi engine asli,
+                  // tanpa "; wv)") diterapkan di onWebViewCreated sebelum URL dimuat.
                 ),
-                onWebViewCreated: (controller) {
+                onWebViewCreated: (controller) async {
                   _webViewController = controller;
+                  // FASE B: terapkan UA kompatibel SEBELUM halaman pertama dimuat
+                  // (urutan dijamin karena URL juga dimuat dari sini).
+                  await _applyCompatUserAgent(controller);
+                  try {
+                    await controller.loadUrl(
+                      urlRequest:
+                          URLRequest(url: WebUri.uri(Uri.parse(widget.examUrl))),
+                    );
+                  } catch (e) {
+                    debugPrint("Gagal memuat URL ujian awal: $e");
+                  }
                 },
                 onProgressChanged: (controller, progress) {
                   setState(() {
@@ -1565,6 +1739,13 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   });
                 },
                 onLoadStart: (controller, url) async {
+                  // FASE B: navigasi baru dimulai = reset status error overlay
+                  if (mounted) {
+                    setState(() {
+                      _webViewError = null;
+                      _isRendererCrashed = false;
+                    });
+                  }
                   if (url != null) {
                     final urlStr = url.toString();
                     // JIKA DI HALAMAN LOGIN GOOGLE: Matikan keamanan agar Autofill/Account Picker sistem bisa muncul
@@ -1613,12 +1794,50 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                 },
                 onCloseWindow: (controller) {},
                 onReceivedError: (controller, request, error) {
-                  debugPrint('WebView Error: ${error.description}');
+                  debugPrint(
+                      'WebView Error [${error.type}]: ${error.description} (${request.url})');
+                  // FASE B: hanya error navigasi utama yang ditampilkan ke siswa;
+                  // error sub-resource (gambar/favicon) tidak boleh mengganti layar.
+                  if (request.isForMainFrame == true && mounted) {
+                    setState(() {
+                      _webViewError = error.description.isNotEmpty
+                          ? error.description
+                          : 'Halaman gagal dimuat.';
+                    });
+                  }
                 },
-                initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(widget.examUrl))),
-              )
-            else
-              const Center(child: Text('Fitur ujian tidak didukung di platform ini.')),
+                onReceivedHttpError: (controller, request, errorResponse) {
+                  debugPrint(
+                      'WebView HTTP Error ${errorResponse.statusCode}: ${request.url}');
+                  if (request.isForMainFrame == true &&
+                      (errorResponse.statusCode ?? 0) >= 400 &&
+                      mounted) {
+                    setState(() {
+                      _webViewError =
+                          'Server menjawab error ${errorResponse.statusCode}.';
+                    });
+                  }
+                },
+                // FASE B: renderer WebView mati (kasus klasik HP RAM kecil).
+                // Tanpa ini layar tetap putih permanen. Solusi: buat ulang WebView.
+                onRenderProcessGone: (controller, detail) {
+                  debugPrint(
+                      'Renderer WebView mati (crash: ${detail.didCrash}). WebView dibuat ulang...');
+                  if (mounted) {
+                    setState(() {
+                      _webViewError = null;
+                      _isRendererCrashed = true;
+                      _webViewKey = UniqueKey();
+                    });
+                  }
+                },
+                // FASE A: log console JS untuk diagnosa lapangan
+                // (SyntaxError engine lama akan terlihat di sini).
+                onConsoleMessage: (controller, consoleMessage) {
+                  debugPrint(
+                      '[WebView JS] ${consoleMessage.messageLevel}: ${consoleMessage.message}');
+                },
+              ),
             
             // PROGRESS BAR (Muncul saat loading)
             if (_loadProgress < 1.0)
@@ -1631,6 +1850,61 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   backgroundColor: Colors.transparent,
                   color: Colors.blue,
                   minHeight: 3,
+                ),
+              ),
+
+            // FASE B: Overlay saat renderer WebView mati (dibuat ulang otomatis)
+            if (_isRendererCrashed)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.white,
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text(
+                          'Engine WebView terhenti. Memuat ulang halaman ujian...',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // FASE B: Overlay error muat halaman — siswa tidak lagi melihat putih polos
+            if (_webViewError != null)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.error_outline, color: Colors.red, size: 60),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Gagal Memuat Halaman Ujian',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _webViewError!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.grey),
+                        ),
+                        const SizedBox(height: 20),
+                        ElevatedButton.icon(
+                          onPressed: _retryWebView,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Muat Ulang'),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
               
