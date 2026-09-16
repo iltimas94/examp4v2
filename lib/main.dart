@@ -228,7 +228,7 @@ class _StartupScreenState extends State<StartupScreen> {
     debugPrint("DEBUG_VERSION: Versi Lokal = $localVersion");
 
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '85520264';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 10));
@@ -274,7 +274,7 @@ class _StartupScreenState extends State<StartupScreen> {
   // --- FUNGSI BARU: MENGAMBIL TOKEN DARI SERVER ---
   Future<String?> _fetchCurrentToken() async {
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '0';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 10));
@@ -357,7 +357,7 @@ class _StartupScreenState extends State<StartupScreen> {
 
     // Jika terkunci, kita perlu validasi sesi
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '1494571347';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
@@ -411,7 +411,7 @@ class _StartupScreenState extends State<StartupScreen> {
   // --- FUNGSI BARU: MENGAMBIL STATUS SISTEM KUNCI DARI SERVER ---
   Future<bool> _fetchLockSystemStatus() async {
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '522874477';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 5));
@@ -583,7 +583,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   Future<void> _fetchExamNote() async {
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '1478015243';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
@@ -601,7 +601,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
 
   Future<void> _fetchExamToken() async {
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '0';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 15));
@@ -689,7 +689,7 @@ class _TokenScreenState extends State<TokenScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _isFetchingAdminCode = true);
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '1460373020';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
@@ -988,7 +988,7 @@ class _ExamListScreenState extends State<ExamListScreen> {
       _errorMessage = "";
     });
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '787301166';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       
@@ -1253,7 +1253,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   // --- FUNGSI BARU UNTUK MENYIMPAN ID SESI ---
   Future<void> _saveCurrentSessionId() async {
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '1494571347';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
@@ -1272,7 +1272,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
 
   Future<bool> _fetchLockSystemStatus() async {
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '522874477';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl)).timeout(const Duration(seconds: 5));
@@ -1309,7 +1309,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     if (!mounted) return;
     setState(() => _isFetchingAdminCode = true);
     try {
-      const String spreadsheetId = '1RHsYTWrJtcxtjHwb-jb7Faq_EG7hHyTgihiU2WzjsbQ';
+      const String spreadsheetId = '1vSlsnJlmJZCzPnyb6Qp13J4ie-5wplng6ZysreGTsaY';
       const String gid = '1460373020';
       const String csvUrl = 'https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv&gid=$gid';
       final response = await http.get(Uri.parse(csvUrl));
