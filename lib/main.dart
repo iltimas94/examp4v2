@@ -1178,12 +1178,24 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
 
   bool _isLockSystemEnabledOnThisSession = false;
 
+  // --- MODE EMBED (IFRAME) ---
+  static const String _embedHandlerName = 'examEmbedStatus';
+  bool _useIframeMode = false; // ditentukan di initState (link Apps Script => true)
+  String _embedStatus = '';
+  bool _embedWatchdogFired = false;
+  Timer? _embedWatchdog;
+
   bool get _isWebViewSupported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   @override
   void initState() {
     super.initState();
     _lockReason = widget.initialLockReason;
+
+    // Mode Embed (iframe) otomatis dipakai untuk link Google Apps Script supaya
+    // pemberitahuan "Aplikasi ini dibuat oleh pengguna Google Apps Script" tidak
+    // muncul. Link ujian lain tetap dimuat seperti sebelumnya (Mode Langsung).
+    _useIframeMode = _isGoogleAppsScriptLink;
 
     _initializeSessionSettings();
     _initializeExamMode();
@@ -1381,6 +1393,234 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
     }
   }
 
+  // --- MODE EMBED (IFRAME) ---
+  // Kenapa perlu: bila link ujian dari Google Apps Script dimuat sebagai dokumen
+  // utama, Google menampilkan pemberitahuan "Aplikasi ini dibuat oleh pengguna
+  // Google Apps Script". Dengan membungkus link tersebut di dalam <iframe>,
+  // Google memperlakukannya sebagai konten embed sehingga pemberitahuan itu
+  // tidak muncul.
+  bool get _isGoogleAppsScriptLink {
+    final String? host = Uri.tryParse(widget.examUrl)?.host;
+    if (host == null || host.isEmpty) return false;
+    return host == 'script.google.com' ||
+        host.endsWith('.script.google.com') ||
+        host == 'script.googleusercontent.com';
+  }
+
+  // Cek apakah URL masih berada di domain ujian (termasuk subdomainnya).
+  bool _isExamHost(String urlStr) {
+    final String? examHost = Uri.tryParse(widget.examUrl)?.host;
+    if (examHost == null || examHost.isEmpty) {
+      return urlStr.startsWith(widget.examUrl);
+    }
+    final String? host = Uri.tryParse(urlStr)?.host;
+    if (host == null || host.isEmpty) return false;
+    return host == examHost || host.endsWith('.$examHost');
+  }
+
+  // Domain yang boleh dinavigasi pada frame utama: domain ujian + domain Google
+  // (termasuk host yang dipakai saat halaman Google dimuat di dalam iframe).
+  bool _isAllowedNavigation(String urlStr) {
+    if (_isExamHost(urlStr)) return true;
+    final String? host = Uri.tryParse(urlStr)?.host;
+    if (host == null || host.isEmpty) return false;
+    const List<String> allowedSuffixes = <String>[
+      'google.com',
+      'googleusercontent.com',
+      'gstatic.com',
+      'googleapis.com',
+    ];
+    for (final String suffix in allowedSuffixes) {
+      if (host == suffix || host.endsWith('.$suffix')) return true;
+    }
+    return false;
+  }
+
+  // Dokumen pembungkus: iframe penuh layar + laporan status ke Flutter
+  // (laporan hanya untuk diagnostik, bukan untuk mengubah jalannya ujian).
+  String _buildEmbedHtml(String examUrl) {
+    final String safeUrl = examUrl
+        .replaceAll('&', '&amp;')
+        .replaceAll('"', '%22')
+        .replaceAll('<', '%3C')
+        .replaceAll('>', '%3E');
+    return '''
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ujian</title>
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #ffffff; overflow: hidden; }
+      #examFrame { display: block; border: 0; width: 100%; height: 100%; }
+    </style>
+  </head>
+  <body>
+    <iframe id="examFrame" src="$safeUrl"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen"
+            referrerpolicy="no-referrer-when-downgrade"
+            allowfullscreen></iframe>
+    <script>
+      (function () {
+        var handlerName = '$_embedHandlerName';
+        var queue = [];
+        function send(item) {
+          try {
+            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+              window.flutter_inappwebview.callHandler(handlerName, item.status, item.detail);
+              return true;
+            }
+          } catch (e) { /* jembatan native belum siap */ }
+          return false;
+        }
+        function report(status, detail) {
+          var item = { status: status, detail: detail || '' };
+          if (!send(item)) queue.push(item);
+        }
+        window.addEventListener('flutterInAppWebViewPlatformReady', function () {
+          var items = queue.slice();
+          queue = [];
+          items.forEach(send);
+        });
+        function inspectFrame() {
+          var frame = document.getElementById('examFrame');
+          if (!frame) { report('embedNoFrame', ''); return; }
+          try {
+            var doc = frame.contentDocument;
+            if (doc && doc.location) {
+              var href = doc.location.href || '';
+              if (href.indexOf('about:') === 0) { report('embedBlocked', ''); return; }
+              report('embedLoaded', href);
+              return;
+            }
+          } catch (e) {
+            report('embedCrossOrigin', frame.getAttribute('src') || '');
+            return;
+          }
+          report('embedEmpty', frame.getAttribute('src') || '');
+        }
+        function init() {
+          var frame = document.getElementById('examFrame');
+          if (!frame) { report('embedNoFrame', ''); return; }
+          frame.addEventListener('load', inspectFrame);
+          frame.addEventListener('error', function () { report('embedError', ''); });
+          report('embedStarted', frame.getAttribute('src') || '');
+          setTimeout(inspectFrame, 5000);
+        }
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+          init();
+        } else {
+          document.addEventListener('DOMContentLoaded', init);
+        }
+      })();
+    </script>
+  </body>
+</html>''';
+  }
+
+  // Memuat halaman ujian sesuai mode yang aktif.
+  Future<void> _loadExamPage({required bool embed}) async {
+    final InAppWebViewController? controller = _webViewController;
+    if (controller == null) return;
+    final String examUrl = widget.examUrl;
+    try {
+      if (embed) {
+        // baseUrl = link ujian, supaya dokumen pembungkus dianggap satu origin
+        // dengan halaman di dalam iframe (cookie/sesi dan aturan SAMEORIGIN
+        // Google tetap lolos).
+        await controller.loadData(
+          data: _buildEmbedHtml(examUrl),
+          mimeType: 'text/html',
+          encoding: 'utf8',
+          baseUrl: WebUri(examUrl, forceToStringRawValue: true),
+          historyUrl: WebUri(examUrl, forceToStringRawValue: true),
+        );
+        debugPrint("Mode Embed (iframe) aktif: $examUrl");
+      } else {
+        await controller.loadUrl(
+          urlRequest: URLRequest(
+            url: WebUri(examUrl, forceToStringRawValue: true),
+          ),
+        );
+        debugPrint("Mode Langsung aktif: $examUrl");
+      }
+    } catch (e) {
+      debugPrint("Gagal memuat halaman ujian (embed=$embed): $e");
+    }
+  }
+
+  // Mencatat laporan status dari dokumen pembungkus iframe.
+  void _registerEmbedHandlers(InAppWebViewController controller) {
+    controller.addJavaScriptHandler(
+      handlerName: _embedHandlerName,
+      callback: (arguments) {
+        if (arguments.isEmpty) return null;
+        final String status = arguments[0]?.toString() ?? '';
+        final String detail =
+            arguments.length > 1 ? (arguments[1]?.toString() ?? '') : '';
+        _embedStatus = status;
+        debugPrint(detail.isEmpty
+            ? "Embed Iframe: $status"
+            : "Embed Iframe: $status -> $detail");
+        return null;
+      },
+    );
+  }
+
+  // Pengaman: kalau dokumen pembungkus sama sekali tidak melapor, muat ulang
+  // sekali agar siswa tidak melihat layar kosong.
+  void _startEmbedWatchdog() {
+    _embedWatchdog?.cancel();
+    _embedWatchdogFired = false;
+    if (!_useIframeMode) return;
+    _embedWatchdog = Timer(const Duration(seconds: 12), () {
+      if (!mounted || _embedWatchdogFired) return;
+      _embedWatchdogFired = true;
+      if (_embedStatus.isEmpty) {
+        debugPrint("Mode Embed: dokumen pembungkus tidak melapor. Memuat ulang sekali.");
+        _loadExamPage(embed: true);
+      } else {
+        debugPrint("Mode Embed: status terakhir = $_embedStatus");
+      }
+    });
+  }
+
+  // Tombol pengawas untuk berpindah antara Mode Embed dan Mode Langsung.
+  Future<void> _toggleEmbedMode() async {
+    final bool target = !_useIframeMode;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ganti Mode Tampilan Ujian?'),
+        content: Text(
+          target
+              ? 'Halaman ujian akan dimuat di dalam iframe (Mode Embed). Pemberitahuan '
+                  'Google Apps Script tidak ditampilkan pada mode ini, tetapi halaman dimuat ulang.'
+              : 'Halaman ujian akan dimuat langsung sebagai halaman utama (Mode Langsung). '
+                  'Pemberitahuan Google Apps Script dapat muncul kembali, dan halaman dimuat ulang.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Ya, Ganti'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _useIframeMode = target;
+      _embedStatus = '';
+    });
+    await _loadExamPage(embed: _useIframeMode);
+    _startEmbedWatchdog();
+  }
+
   // --- FASE B: PEMULIHAN WEBVIEW SAAT GAGAL MUAT ---
   Future<void> _retryWebView() async {
     setState(() {
@@ -1395,7 +1635,9 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
       } catch (e) {
         debugPrint("Gagal membersihkan cache WebView: $e");
       }
-      await controller.reload();
+      // Muat ulang sesuai mode yang sedang aktif (Embed/Langsung).
+      await _loadExamPage(embed: _useIframeMode);
+      _startEmbedWatchdog();
     } else {
       // Belum ada controller: paksa WebView dibuat ulang dengan URL awal.
       setState(() => _webViewKey = UniqueKey());
@@ -1573,6 +1815,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
   @override
   void dispose() {
     _timer.cancel();
+    _embedWatchdog?.cancel();
     _lockReasonSubscription?.cancel();
     _adminCodeController.dispose();
     _exitExamMode();
@@ -1666,9 +1909,20 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                     ),
                   );
                   if (shouldReload ?? false) {
-                    _webViewController?.reload();
+                    await _loadExamPage(embed: _useIframeMode);
+                    _startEmbedWatchdog();
                   }
                 },
+              ),
+            if (_isWebViewSupported && !isActuallyLocked)
+              IconButton(
+                tooltip: _useIframeMode
+                    ? 'Mode Embed (iframe aktif)'
+                    : 'Mode Langsung (iframe nonaktif)',
+                icon: Icon(_useIframeMode
+                    ? Icons.picture_in_picture_alt
+                    : Icons.public),
+                onPressed: _toggleEmbedMode,
               ),
             IconButton(
               icon: const Icon(Icons.home),
@@ -1724,14 +1978,12 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   // FASE B: terapkan UA kompatibel SEBELUM halaman pertama dimuat
                   // (urutan dijamin karena URL juga dimuat dari sini).
                   await _applyCompatUserAgent(controller);
-                  try {
-                    await controller.loadUrl(
-                      urlRequest:
-                          URLRequest(url: WebUri.uri(Uri.parse(widget.examUrl))),
-                    );
-                  } catch (e) {
-                    debugPrint("Gagal memuat URL ujian awal: $e");
-                  }
+                  // Siapkan penerima laporan status dari dokumen pembungkus iframe.
+                  _registerEmbedHandlers(controller);
+                  // Muat halaman ujian (Mode Embed untuk link Google Apps Script,
+                  // Mode Langsung untuk link lainnya).
+                  await _loadExamPage(embed: _useIframeMode);
+                  _startEmbedWatchdog();
                 },
                 onProgressChanged: (controller, progress) {
                   setState(() {
@@ -1754,7 +2006,7 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                       await NativeSecureFlagService.clearSecureFlag();
                       await ActivityMonitorService.stopMonitoring();
                       debugPrint("Login Phase: Security Temporarily Disabled for Autofill support.");
-                    } else if (urlStr.startsWith(widget.examUrl) || urlStr.contains("docs.google.com/forms")) {
+                    } else if (_isExamHost(urlStr) || urlStr.contains("docs.google.com/forms")) {
                       // JIKA KEMBALI KE FORM/DOMAIN UJIAN: Aktifkan kembali keamanan
                       await NativeSecureFlagService.setSecureFlag();
                       await ActivityMonitorService.initializeMonitoring();
@@ -1770,16 +2022,22 @@ class _ExamContentScreenState extends State<ExamContentScreen> {
                   final url = navigationAction.request.url;
                   if (_lockReason != null) return NavigationActionPolicy.CANCEL;
                   final String urlStr = url.toString();
-                  // Izinkan navigasi ke domain ujian dan google (termasuk
-                  // accounts.google.com untuk login dan accounts.google.com
-                  // untuk account picker)
-                  if (urlStr.startsWith(widget.examUrl) ||
-                      urlStr.contains('.google.com') ||
-                      urlStr.contains('googleusercontent.com') ||
-                      urlStr.contains('accounts.google.com')) {
+
+                  // Navigasi di dalam iframe (sub-frame) dibiarkan agar konten
+                  // embed Google (Drive/Docs/Apps Script) beserta asetnya dapat
+                  // dimuat. Yang dibatasi ketat tetap navigasi frame utama.
+                  if (!navigationAction.isForMainFrame) {
                     return NavigationActionPolicy.ALLOW;
                   }
+
+                  // Izinkan navigasi frame utama ke domain ujian dan Google
+                  // (termasuk accounts.google.com untuk login/pemilihan akun).
+                  if (_isAllowedNavigation(urlStr)) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+
                   // Blokir navigasi ke luar domain yang diizinkan
+                  debugPrint("Navigasi ditolak (di luar domain ujian/Google): $urlStr");
                   return NavigationActionPolicy.CANCEL;
                 },
                 onCreateWindow: (controller, createWindowRequest) async {
