@@ -1,0 +1,5 @@
+Analyzing 2 items...                                            
+
+  error - The name 'CbtCacheLogin' isn't a type, so it can't be used as a type argument - lib\cbt\cbt_session.dart:321:17 - non_type_as_type_argument
+  error - The method 'CbtCacheLogin' isn't defined for the type 'CbtSession' - lib\cbt\cbt_session.dart:331:14 - undefined_method
+

@@ -10,6 +10,13 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
+// --- CBT NATIVE (Alternatif Family Link) ---
+import 'cbt/cbt_api.dart'
+    show kCbtNamaPaten, kCbtNativeLink, deteksiUrlApiDariLink;
+import 'cbt/cbt_login_screen.dart';
+import 'cbt/cbt_widgets.dart'
+    show kCbtPrimary, kCbtPrimaryDark, kCbtPrimaryLight, kCbtTextMuted, CbtNotifs;
+
 // --- KELAS MODEL ---
 class Exam {
   final String image, mapel, waktu, link;
@@ -177,6 +184,7 @@ class ExamBrowserApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'ExBrowser 4',
+      navigatorKey: CbtNotifs.navKey,
       theme: ThemeData(
         primarySwatch: Colors.blue,
         scaffoldBackgroundColor: Colors.grey[100],
@@ -1014,6 +1022,11 @@ class _ExamListScreenState extends State<ExamListScreen> {
             _exams = exams;
             if (exams.isEmpty) _errorMessage = "Tidak ada ujian tersedia saat ini.";
           });
+          // Deteksi otomatis URL API CBT (doPost) dari link ujian: link Web App
+          // Apps Script pada kolom "link" = endpoint yang sama dengan klien REST.
+          for (final e in exams) {
+            deteksiUrlApiDariLink(e.link);
+          }
         } else {
           setState(() => _errorMessage = "Gagal memuat data (Error: ${response.statusCode})");
         }
@@ -1028,6 +1041,101 @@ class _ExamListScreenState extends State<ExamListScreen> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  /// ENTRY POINT CBT NATIVE (kartu paten): pre-locking persis seperti kartu
+  /// ujian web, lalu buka alur login CBT. Route diberi nama 'cbt-login' sebab
+  /// layar-layar CBT memakai popUntil(settings.name == 'cbt-login').
+  Future<void> _bukaCbtNative() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('isAppLocked', true);
+    await prefs.setString('lastExamUrl', kCbtNativeLink);
+    await prefs.setString(
+        'lastLockReason', "Aplikasi ditutup tidak wajar saat sesi ujian.");
+    // lockCount tidak di-reset di sini, melainkan mengikuti sesi server
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        settings: const RouteSettings(name: 'cbt-login'),
+        builder: (context) => const CbtLoginScreen(),
+      ),
+    );
+  }
+
+  /// Kartu PATEN: selalu tampil paling atas di Daftar Ujian dan TIDAK
+  /// bergantung data Google Sheets — tetap muncul walau CMS gagal dimuat.
+  Widget _kartuPaten(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: InkWell(
+        onTap: _bukaCbtNative,
+        child: Row(
+          children: [
+            Container(
+              width: 96,
+              height: 96,
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [kCbtPrimaryDark, kCbtPrimary],
+                ),
+              ),
+              alignment: Alignment.center,
+              child: const Text('📚', style: TextStyle(fontSize: 42)),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      kCbtNamaPaten,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Ujian mandiri tanpa browser — tetap bisa dibuka walau '
+                      'link web diblokir Family Link.',
+                      style: TextStyle(fontSize: 12, color: kCbtTextMuted),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: kCbtPrimaryLight,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'SELALU TERSEDIA',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: kCbtPrimaryDark,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(right: 10),
+              child: Icon(Icons.chevron_right, color: kCbtPrimary, size: 28),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1052,10 +1160,25 @@ class _ExamListScreenState extends State<ExamListScreen> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _errorMessage.isNotEmpty
-          ? Center(
+      body: Column(
+        children: [
+          _kartuPaten(context),
+          Expanded(child: _isiDaftarUjian()),
+        ],
+      ),
+    );
+  }
+
+  /// Isi daftar ujian web dari Google Sheets (loading / error / grid).
+  /// Kartu paten CBT di atasnya TIDAK ikut hilang saat bagian ini bermasalah.
+  Widget _isiDaftarUjian() {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    if (_errorMessage.isNotEmpty) return _panelGagalMuat();
+    return _gridUjian();
+  }
+
+  Widget _panelGagalMuat() {
+    return Center(
               child: Padding(
                 padding: const EdgeInsets.all(20.0),
                 child: Column(
@@ -1069,8 +1192,11 @@ class _ExamListScreenState extends State<ExamListScreen> {
                   ],
                 ),
               ),
-            )
-          : GridView.builder(
+            );
+  }
+
+  Widget _gridUjian() {
+    return GridView.builder(
         padding: const EdgeInsets.all(8),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
@@ -1121,7 +1247,6 @@ class _ExamListScreenState extends State<ExamListScreen> {
             ),
           );
         },
-      ),
     );
   }
 }
