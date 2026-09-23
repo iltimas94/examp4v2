@@ -124,11 +124,21 @@ class CbtApi {
   /// yang dipakai ulang memanfaatkan keep-alive sehingga request kedua dan
   /// seterusnya nyaris tanpa handshake — persis seperti web yang koneksinya
   /// sudah hangat.
-  static final http.Client client = http.Client();
+  static http.Client? _client;
 
-  /// Tutup koneksi saat alur CBT benar-benar berakhir (dipanggil dari
-  /// [CbtSecurityController.akhiriSesi] lewat `CbtApi.tutupKlien()`).
-  static void tutupKlien() => client.close();
+  /// Klien HTTP bersama; dibuat on-demand dan **dibuat ulang otomatis** bila
+  /// sudah pernah ditutup lewat [tutupKlien]. `http.Client` yang sudah
+  /// `close()` tidak boleh dipakai lagi — tanpa rekreasi ini, satu panggilan
+  /// `tutupKlien()` akan mematikan SEMUA request CBT selamanya.
+  static http.Client get client => _client ??= http.Client();
+
+  /// Opsional: tutup koneksi bersama (dipakai pada test / kebersihan akhir
+  /// sesi). Permintaan berikutnya membuka klien baru secara otomatis — aman
+  /// dipanggil kapan pun.
+  static void tutupKlien() {
+    _client?.close();
+    _client = null;
+  }
 
   static Future<http.Response> _postIkutiRedirect(Uri uri, String body) async {
     const hdrs = {'Content-Type': 'application/json; charset=utf-8'};

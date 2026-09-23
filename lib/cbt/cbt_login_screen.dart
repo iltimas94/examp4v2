@@ -573,11 +573,37 @@ class _CbtLoginScreenState extends State<CbtLoginScreen> {
                         ),
                       ),
                     const SizedBox(height: 4),
-                    const Text('Pilih Kelas',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: kCbtTextMuted)),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text('Pilih Kelas',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: kCbtTextMuted)),
+                        ),
+                        // Refresh daftar kelas & nama kapan pun (cache 12 jam
+                        // jarang berubah — tarik server hanya bila perlu).
+                        IconButton(
+                          tooltip: 'Perbarui daftar kelas & nama dari server',
+                          visualDensity: VisualDensity.compact,
+                          iconSize: 19,
+                          onPressed: _muatData
+                              ? null
+                              : () =>
+                                  muatDataLoginDropdown(paksaServer: true),
+                          icon: _muatData
+                              ? const SizedBox(
+                                  width: 15,
+                                  height: 15,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                )
+                              : const Icon(Icons.refresh,
+                                  color: kCbtTextMuted),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 6),
                     if (_muatData && dataLogin == null)
                       const Padding(
