@@ -33,9 +33,8 @@ class MainActivity: FlutterActivity() {
     private var isCurrentlyLocked = false
     private var previousDndState: Int = -1
 
-    // Flag untuk menunda pengaktifan keamanan (Delayed Start)
+    // Flag keamanan — dinyalakan SEGERA saat startMonitoring (tanpa jeda).
     private var isSecurityActive = false
-    private val DELAY_SECURITY_MS: Long = 60000 // Jeda 1 menit sesuai permintaan user
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -61,21 +60,18 @@ class MainActivity: FlutterActivity() {
                     isMonitoringActivity = true
                     isAppInFocus = true
                     isCurrentlyLocked = false
-                    isSecurityActive = false // Reset keamanan saat mulai
+                    isSecurityActive = true // Keamanan aktif SEGERA (jeda 1 menit dihapus)
                     
                     initialSystemUiVisibility = window.decorView.systemUiVisibility
                     hideSystemUI()
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     setDndMode(true)
                     
-                    // AKTIVASI KEAMANAN SETELAH JEDA 1 MENIT
+                    // Keamanan langsung aktif — Delayed Start 1 menit DIHAPUS
+                    // sesuai permintaan; penguncian langsung berlaku.
                     handler.removeCallbacksAndMessages(null)
-                    handler.postDelayed({
-                        isSecurityActive = true
-                        Log.d("MainActivity", "Sistem Keamanan Aktif (Delayed Start Berakhir)")
-                    }, DELAY_SECURITY_MS)
                     
-                    result.success("Activity monitoring started with 1 min delay")
+                    result.success("Activity monitoring started")
                 }
                 "stopMonitoring" -> {
                     isMonitoringActivity = false
@@ -191,7 +187,7 @@ class MainActivity: FlutterActivity() {
                 isCurrentlyLocked = true
             }
         } else if (!isSecurityActive) {
-            Log.d("MainActivity", "Penguncian dibatalkan: Masih dalam masa jeda 1 menit. Alasan: $reason")
+            Log.d("MainActivity", "Penguncian dibatalkan: Monitoring tidak aktif. Alasan: $reason")
         }
     }
 

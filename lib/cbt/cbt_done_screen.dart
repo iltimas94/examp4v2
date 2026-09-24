@@ -196,12 +196,36 @@ class _CbtDoneScreenState extends State<CbtDoneScreen> {
     setState(() => _skor = skorBaru);
   }
 
-  /// Kembali ke halaman login dari layar selesai (btnDoneBack -> kembaliKeLogin).
-  Future<void> _kembaliKeLogin() async {
+  /// Konfirmasi keluar CBT dari layar selesai — TANPA password (ujian sudah
+  /// selesai, tidak ada yang perlu dikunci lagi). Peringatan muncul bila
+  /// jawaban akhir belum terkonfirmasi terkirim.
+  void _konfirmasiKeluarCbt() {
+    final aman = session.statusKirimFinal == 'ok';
+    CbtNotifs.konfirmasi(
+      context,
+      aman
+          ? 'Keluar dari CBT? Jawabanmu sudah terkirim — aman untuk keluar.'
+          : 'Jawaban akhir BELUM terkonfirmasi terkirim. Keluar sekarang akan '
+              'menghentikan pengiriman otomatis. Yakin ingin keluar?',
+      _keluarCbt,
+    );
+  }
+
+  /// Keluar TOTAL dari alur CBT ke Daftar Ujian (semua route cbt-* di-pop)
+  /// sambil melepas keamanan — tanpa meminta kunci/password.
+  Future<void> _keluarCbt() async {
     session.batalkanKirimFinal(); // hentikan retry final yg mungkin berjalan
     await session.kembaliKeLogin();
+    await CbtSecurityController.instance.akhiriSesi();
     if (!mounted) return;
-    Navigator.of(context).popUntil((r) => r.settings.name == 'cbt-login');
+    bool bukanCbt(Route<dynamic> r) =>
+        !(r.settings.name ?? '').startsWith('cbt');
+    final nav = CbtNotifs.navKey.currentState;
+    if (nav != null) {
+      nav.popUntil(bukanCbt);
+    } else {
+      Navigator.of(context).popUntil(bukanCbt);
+    }
   }
 
   // ---------- Remedi (klikRemedi + lakukanRemedi) ----------
@@ -351,7 +375,7 @@ class _CbtDoneScreenState extends State<CbtDoneScreen> {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _kembaliKeLogin();
+        if (!didPop) _konfirmasiKeluarCbt();
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFf3f7f3),
@@ -491,8 +515,8 @@ class _CbtDoneScreenState extends State<CbtDoneScreen> {
                           textStyle: const TextStyle(
                               fontSize: 16, fontWeight: FontWeight.w700),
                         ),
-                        onPressed: _kembaliKeLogin,
-                        child: const Text('Kembali ke Halaman Awal'),
+                        onPressed: _konfirmasiKeluarCbt,
+                        child: const Text('🚪 Keluar CBT'),
                       ),
                     ),
                     if (_teksBolehTutup.isNotEmpty) ...[

@@ -16,6 +16,25 @@ import 'cbt_security.dart';
 import 'cbt_session.dart';
 import 'cbt_widgets.dart';
 
+/// Syarat keamanan login CBT: NISN yang diketik WAJIB cocok dengan NISN milik
+/// nama yang dipilih di dropdown. Berlaku untuk SEMUA login (tidak peduli flag
+/// `wajibNisn` dari server). Mengembalikan null = lolos, atau pesan error.
+String? validasiNisnLogin({
+  required String diketik,
+  required String nisnTerpilih,
+  required String namaTerpilih,
+}) {
+  final bersih = diketik.replaceAll(RegExp(r'\D'), '');
+  if (bersih.isEmpty) return 'NISN wajib diketik sesuai nama yang kamu pilih.';
+  final a = bersih.padLeft(10, '0');
+  final b = nisnTerpilih.padLeft(10, '0');
+  if (a != b) {
+    return 'NISN yang kamu ketik tidak cocok dengan nama "$namaTerpilih" '
+        'yang dipilih. Periksa kembali NISN-mu.';
+  }
+  return null;
+}
+
 class CbtLoginScreen extends StatefulWidget {
   const CbtLoginScreen({super.key});
   @override
@@ -29,7 +48,6 @@ class _CbtLoginScreenState extends State<CbtLoginScreen> {
   final TextEditingController _nisnCtrl = TextEditingController();
 
   CbtDataLogin? dataLogin;
-  bool wajibNisn = false;
   bool _muatData = true;
   bool _proses = false;
   bool _retryDisabled = false;
@@ -88,7 +106,6 @@ class _CbtLoginScreenState extends State<CbtLoginScreen> {
       if (cache != null && mounted) {
         setState(() {
           dataLogin = cache.data;
-          wajibNisn = cache.data.wajibNisn;
           _muatData = false;
           _sumberStatus = '✔ Sumber daftar: cache aplikasi'
               '${cache.data.versi > 0 ? ' v${cache.data.versi}' : ''}';
@@ -123,7 +140,6 @@ class _CbtLoginScreenState extends State<CbtLoginScreen> {
       if (!mounted) return;
       setState(() {
         dataLogin = dl;
-        wajibNisn = dl.wajibNisn;
         _muatData = false;
         _sumberStatus = '✔ Sumber daftar: SERVER';
       });
@@ -171,22 +187,16 @@ class _CbtLoginScreenState extends State<CbtLoginScreen> {
       setState(() => _errorMessage = 'Pilih nama, lalu isi Kode Ujian wajib diisi.');
       return;
     }
-    // WAJIB NISN: NISN ketik wajib cocok dengan nama yang dipilih (client-only).
-    if (wajibNisn) {
-      final diketik = _nisnCtrl.text.replaceAll(RegExp(r'\D'), '');
-      final nisnDiketik = diketik.padLeft(10, '0');
-      final nisnTerpilih = nisn.padLeft(10, '0');
-      if (diketik.isEmpty) {
-        setState(
-            () => _errorMessage = 'NISN wajib diketik sesuai nama yang kamu pilih.');
-        return;
-      }
-      if (nisnDiketik != nisnTerpilih) {
-        setState(() => _errorMessage =
-            'NISN yang kamu ketik tidak cocok dengan nama "${_namaTerpilih ?? ''}" '
-            'yang dipilih. Periksa kembali NISN-mu.');
-        return;
-      }
+    // KEAMANAN: NISN ketik WAJIB cocok dengan NISN nama yang dipilih —
+    // berlaku untuk SEMUA login, tidak peduli flag server.
+    final galatNisn = validasiNisnLogin(
+      diketik: _nisnCtrl.text,
+      nisnTerpilih: nisn,
+      namaTerpilih: _namaTerpilih ?? '',
+    );
+    if (galatNisn != null) {
+      setState(() => _errorMessage = galatNisn);
+      return;
     }
     setState(() => _proses = true);
     if (mounted) {
@@ -654,22 +664,20 @@ class _CbtLoginScreenState extends State<CbtLoginScreen> {
                       onChanged: daftarNama.isEmpty ? null : _pilihNama,
                     ),
                     const SizedBox(height: 12),
-                    if (wajibNisn) ...[
-                      const Text('NISN (wajib diketik)',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: kCbtTextMuted)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _nisnCtrl,
-                        keyboardType: TextInputType.phone,
-                        maxLength: 12,
-                        decoration: _deko('NISN',
-                            hint: 'Ketik NISN yang sesuai nama di atas'),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
+                    const Text('NISN (wajib diketik)',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: kCbtTextMuted)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _nisnCtrl,
+                      keyboardType: TextInputType.phone,
+                      maxLength: 12,
+                      decoration: _deko('NISN',
+                          hint: 'Ketik NISN yang sesuai nama di atas'),
+                    ),
+                    const SizedBox(height: 8),
                     const Text('Kode Ujian',
                         style: TextStyle(
                             fontSize: 13,
